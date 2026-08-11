@@ -1,0 +1,10 @@
+import express from "express";
+const app=express(),TV="https://tvnetil-addon.vercel.app",CM="https://v3-cinemeta.strem.io/meta";
+app.get("/manifest.json",(_,r)=>r.json({id:"com.elad.tvnetil.directstreams",version:"1.3.0",name:"TVNetil Direct Streams",description:"TVNetil streams for Nuvio/Cinemeta",resources:["stream"],types:["movie","series"],idPrefixes:["tt"]}));
+const j=async u=>{let x=await fetch(u);if(!x.ok)throw Error(x.status);return x.json()};
+const norm=s=>String(s||"").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^\p{L}\p{N}]+/gu," ").replace(/\s+/g," ").trim();
+const year=s=>{let m=String(s||"").match(/\b(19|20)\d{2}\b/);return m?+m[0]:null};
+function score(x,w,wy){let a=norm(x.name||x.title),b=norm(w);if(!a||!b)return-1;let s=a===b?100:(a.includes(b)||b.includes(a)?60:0);for(let z of new Set(b.split(" ")))if(a.split(" ").includes(z))s+=8;let q=year(x.releaseInfo||x.releaseDate||x.year);if(wy&&q)s+=q===wy?40:(Math.abs(q-wy)===1?10:-30);return s}
+async function find(t,name,wy){let c=t==="series"?"tvnetil_series":"tvnetil_movies",best=null,bs=-1;for(let skip=0;skip<=5000;skip+=100){let d;try{d=await j(`${TV}/catalog/${t}/${c}.json?skip=${skip}`)}catch{break}let a=d.metas||[];if(!a.length)break;for(let x of a){let s=score(x,name,wy);if(s>bs){bs=s;best=x}}if(bs>=140||a.length<100)break}return bs>=75?best:null}
+app.get("/stream/:type/:id.json",async(q,r)=>{let{type,id}=q.params;if(!/^tt\d+$/.test(id)||!["movie","series"].includes(type))return r.json({streams:[]});try{let m=(await j(`${CM}/${type}/${id}.json`)).meta;if(!m?.name)return r.json({streams:[]});let x=await find(type,m.name,year(m.releaseInfo||m.releaseDate||m.year));if(!x?.id)return r.json({streams:[]});let d=await j(`${TV}/stream/${type}/${encodeURIComponent(x.id)}.json`);r.json({streams:(d.streams||[]).filter(x=>x.url).map((x,i)=>({name:x.name||"TVNetil",title:x.title||`TVNetil ${i+1}`,url:x.url,...(x.behaviorHints?{behaviorHints:x.behaviorHints}:{})}))})}catch(e){console.error(e);r.json({streams:[]})}});
+app.get("/",(_,r)=>r.send("TVNetil Direct Streams v1.3"));app.listen(process.env.PORT||3000);
