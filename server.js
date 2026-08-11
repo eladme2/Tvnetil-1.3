@@ -4,12 +4,13 @@ const app = express();
 
 const TV = "https://tvnetil-addon.vercel.app";
 const CM = "https://v3-cinemeta.strem.io/meta";
+const FAVE = "https://www.favez0ne.net/search.php";
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
   version: "1.4.0",
   name: "TVNetil Direct Streams",
-  description: "TVNetil streams for Nuvio/Cinemeta",
+  description: "TVNetil titles -> Favez0ne streams for Nuvio/Cinemeta",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -19,11 +20,15 @@ app.get("/manifest.json", (_, res) => {
   res.json(MANIFEST);
 });
 
-async function getJson(url) {
+async function getText(url, options = {}) {
   const response = await fetch(url, {
+    ...options,
     headers: {
-      "User-Agent": "TVNetil-Nuvio-Addon/1.4.0",
-      "Accept": "application/json"
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+      "Accept":
+        "text/html,application/xhtml+xml,application/json,*/*",
+      ...(options.headers || {})
     }
   });
 
@@ -31,9 +36,19 @@ async function getJson(url) {
 
   if (!response.ok) {
     throw new Error(
-      `HTTP ${response.status}: ${text.slice(0, 300)}`
+      `HTTP ${response.status}: ${text.slice(0, 500)}`
     );
   }
+
+  return text;
+}
+
+async function getJson(url) {
+  const text = await getText(url, {
+    headers: {
+      "Accept": "application/json"
+    }
+  });
 
   try {
     return JSON.parse(text);
@@ -72,6 +87,12 @@ function getItemYear(item) {
   );
 }
 
+function removeYear(value) {
+  return String(value || "")
+    .replace(/\s*\((19|20)\d{2}\)\s*$/, "")
+    .trim();
+}
+
 /*
 ====================================================
 TVNETIL CATALOG
@@ -92,27 +113,91 @@ async function getCatalog(type, skip) {
 
 /*
 ====================================================
-SEARCH CATALOG BY NAME
+TVNETIL MATCHING
 ====================================================
 */
 
-async function searchCatalogByName(
+function score(item, wantedNames, wantedYear) {
+  const itemName = normalize(
+    item.name ||
+    item.title ||
+    item.originalName ||
+    item.originalTitle
+  );
+
+  if (!itemName) {
+    return -1;
+  }
+
+  let best = -1;
+
+  for (const wantedName of wantedNames) {
+    const wanted = normalize(wantedName);
+
+    if (!wanted) {
+      continue;
+    }
+
+    let result = 0;
+
+    if (itemName === wanted) {
+      result += 200;
+    } else if (
+      itemName.includes(wanted) ||
+      wanted.includes(itemName)
+    ) {
+      result += 100;
+    }
+
+    const wantedWords =
+      new Set(wanted.split(" "));
+
+    const itemWords =
+      new Set(itemName.split(" "));
+
+    for (const word of wantedWords) {
+      if (
+        word.length >= 2 &&
+        itemWords.has(word)
+      ) {
+        result += 10;
+      }
+    }
+
+    const itemYear = getItemYear(item);
+
+    if (wantedYear && itemYear) {
+      if (itemYear === wantedYear) {
+        result += 80;
+      } else if (
+        Math.abs(itemYear - wantedYear) === 1
+      ) {
+        result += 10;
+      } else {
+        result -= 100;
+      }
+    }
+
+    best = Math.max(best, result);
+  }
+
+  return best;
+}
+
+async function findTVNetilItem(
   type,
-  wantedNames,
+  names,
   wantedYear
 ) {
-  const names = wantedNames
-    .map(normalize)
-    .filter(Boolean);
+  let best = null;
+  let bestScore = -1;
 
   console.log(
-    "TVNETIL SEARCH NAMES:",
+    "TVNETIL SEARCH:",
     names,
     "YEAR:",
     wantedYear
   );
-
-  let candidates = [];
 
   for (
     let skip = 0;
@@ -141,79 +226,34 @@ async function searchCatalogByName(
     }
 
     for (const item of metas) {
-      const itemName = normalize(
-        item.name ||
-        item.title ||
-        item.originalName ||
-        item.originalTitle
-      );
+      const currentScore =
+        score(
+          item,
+          names,
+          wantedYear
+        );
 
-      if (!itemName) {
-        continue;
-      }
-
-      const itemYear =
-        getItemYear(item);
-
-      /*
-      Exact name match
-      */
-
-      for (const wanted of names) {
-        if (itemName === wanted) {
-          let score = 200;
-
-          if (
-            wantedYear &&
-            itemYear === wantedYear
-          ) {
-            score += 100;
-          }
-
-          candidates.push({
-            item,
-            score
-          });
-        }
-      }
-
-      /*
-      Contains match
-      */
-
-      for (const wanted of names) {
-        if (
-          itemName.includes(wanted) ||
-          wanted.includes(itemName)
-        ) {
-          let score = 100;
-
-          if (
-            wantedYear &&
-            itemYear === wantedYear
-          ) {
-            score += 80;
-          }
-
-          candidates.push({
-            item,
-            score
-          });
-        }
+      if (currentScore > bestScore) {
+        bestScore = currentScore;
+        best = item;
       }
     }
 
-    /*
-    We can stop after collecting
-    enough strong candidates.
-    */
+    console.log(
+      "CATALOG PAGE:",
+      skip,
+      "ITEMS:",
+      metas.length,
+      "BEST:",
+      best?.name || best?.title,
+      "SCORE:",
+      bestScore
+    );
 
-    if (
-      candidates.some(
-        candidate =>
-          candidate.score >= 300
-      )
-    ) {
+    /*
+    Exact title + exact year is considered safe.
+    */
+    if (bestScore >= 280) {
       break;
     }
 
@@ -222,195 +262,254 @@ async function searchCatalogByName(
     }
   }
 
-  candidates.sort(
-    (a, b) =>
-      b.score - a.score
+  console.log(
+    "FINAL TVNETIL MATCH:",
+    best?.id,
+    best?.name || best?.title,
+    bestScore
   );
 
   /*
-  Only accept a safe match.
+  Conservative threshold.
+  We do NOT want the wrong movie.
   */
+  return bestScore >= 100
+    ? best
+    : null;
+}
 
-  const safe =
-    candidates.find(
-      candidate => {
-        const itemYear =
-          getItemYear(
-            candidate.item
-          );
+/*
+====================================================
+FAVEZ0NE
+====================================================
+*/
 
-        return (
-          candidate.score >= 180 &&
-          (
-            !wantedYear ||
-            !itemYear ||
-            itemYear === wantedYear
-          )
-        );
+async function searchFavez0ne(title) {
+  console.log(
+    "FAVEZ0NE SEARCH:",
+    title
+  );
+
+  const body =
+    new URLSearchParams({
+      srch: title,
+      "submit.x": "0",
+      "submit.y": "0"
+    }).toString();
+
+  const html =
+    await getText(
+      FAVE,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+          "Referer":
+            "https://www.favez0ne.net/",
+          "Origin":
+            "https://www.favez0ne.net",
+          "Accept":
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        },
+        body
       }
     );
-
-  if (safe) {
-    console.log(
-      "SAFE TVNETIL MATCH:",
-      safe.item.id,
-      safe.item.name ||
-        safe.item.title,
-      "SCORE:",
-      safe.score
-    );
-
-    return safe.item;
-  }
 
   console.log(
-    "NO SAFE TVNETIL MATCH"
+    "FAVEZ0NE RESPONSE LENGTH:",
+    html.length
   );
 
-  return null;
+  return html;
 }
 
 /*
 ====================================================
-GET TMDB LOCALIZED NAME
+HTML ENTITY DECODER
 ====================================================
 */
 
-async function getTMDBNames(
-  tmdbId,
-  type
-) {
-  if (!tmdbId) {
-    return [];
-  }
-
-  /*
-  TMDB public API is not used here because
-  no API key is required by this endpoint.
-  We use Cinemeta's localized metadata first.
-  */
-
-  const names = [];
-
-  try {
-    const languageUrls = [
-      `https://v3-cinemeta.strem.io/meta/${type}/tmdb:${tmdbId}.json`,
-      `https://v3-cinemeta.strem.io/meta/${type}/${tmdbId}.json`
-    ];
-
-    for (const url of languageUrls) {
-      try {
-        const data =
-          await getJson(url);
-
-        const meta =
-          data?.meta;
-
-        if (!meta) {
-          continue;
-        }
-
-        for (
-          const value of [
-            meta.name,
-            meta.originalName,
-            meta.originalTitle,
-            meta.title
-          ]
-        ) {
-          if (
-            value &&
-            !names.includes(value)
-          ) {
-            names.push(value);
-          }
-        }
-      } catch {
-        /*
-        Ignore failed alternate
-        metadata lookups.
-        */
-      }
-    }
-  } catch {
-    /*
-    Ignore localization failure.
-    */
-  }
-
-  return names;
-}
-
-/*
-====================================================
-CINEMETA
-====================================================
-*/
-
-async function getCinemeta(
-  type,
-  imdbId
-) {
-  return await getJson(
-    `${CM}/${type}/${imdbId}.json`
-  );
-}
-
-/*
-====================================================
-CLEAN STREAMS
-====================================================
-*/
-
-function cleanStreams(streams) {
-  if (!Array.isArray(streams)) {
-    return [];
-  }
-
-  return streams
-    .filter(
-      stream =>
-        stream &&
-        typeof stream.url === "string" &&
-        stream.url.length > 0
+function decodeHtml(value) {
+  return String(value || "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_, n) =>
+      String.fromCharCode(Number(n))
     )
-    .map(
-      (stream, index) => {
-        const result = {
-          name:
-            stream.name ||
-            "TVNetil",
-
-          title:
-            stream.title ||
-            stream.name ||
-            `TVNetil ${index + 1}`,
-
-          url: stream.url
-        };
-
-        if (
-          stream.behaviorHints
-        ) {
-          result.behaviorHints =
-            stream.behaviorHints;
-        }
-
-        if (
-          stream.externalUrl
-        ) {
-          result.externalUrl =
-            stream.externalUrl;
-        }
-
-        return result;
-      }
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) =>
+      String.fromCharCode(
+        parseInt(n, 16)
+      )
     );
 }
 
 /*
 ====================================================
-STREAM
+FAVEZ0NE LINK EXTRACTION
+====================================================
+*/
+
+function extractFavezLinks(html) {
+  const results = [];
+
+  /*
+  Find normal href URLs.
+  */
+  const hrefRegex =
+    /href\s*=\s*["']([^"']+)["']/gi;
+
+  let match;
+
+  while (
+    (match = hrefRegex.exec(html)) !== null
+  ) {
+    let url =
+      decodeHtml(match[1]).trim();
+
+    if (
+      !/^https?:\/\//i.test(url)
+    ) {
+      continue;
+    }
+
+    results.push(url);
+  }
+
+  /*
+  Also catch URLs written directly in HTML.
+  */
+  const directRegex =
+    /https?:\/\/[^\s"'<>\\]+/gi;
+
+  while (
+    (match = directRegex.exec(html)) !== null
+  ) {
+    let url =
+      decodeHtml(match[0])
+        .replace(/[),.;]+$/, "")
+        .trim();
+
+    results.push(url);
+  }
+
+  /*
+  Remove duplicates.
+  */
+  const unique =
+    [...new Set(results)];
+
+  /*
+  Only keep known streaming/file hosts.
+  */
+  const allowed = [
+    "pixeldrain.com",
+    "gofile.io",
+    "gofile.io",
+    "mega.nz",
+    "1fichier.com",
+    "send.now",
+    "usersdrive.com",
+    "usersdrive.net"
+  ];
+
+  return unique.filter(url => {
+    try {
+      const host =
+        new URL(url)
+          .hostname
+          .toLowerCase();
+
+      return allowed.some(
+        domain =>
+          host === domain ||
+          host.endsWith("." + domain)
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+/*
+====================================================
+STREAM TITLE
+====================================================
+*/
+
+function hostName(url) {
+  try {
+    const host =
+      new URL(url).hostname
+        .toLowerCase();
+
+    if (
+      host.includes("pixeldrain")
+    ) {
+      return "Pixeldrain";
+    }
+
+    if (
+      host.includes("gofile")
+    ) {
+      return "Gofile";
+    }
+
+    if (
+      host.includes("mega.nz")
+    ) {
+      return "Mega";
+    }
+
+    if (
+      host.includes("1fichier")
+    ) {
+      return "1fichier";
+    }
+
+    if (
+      host.includes("send.now")
+    ) {
+      return "Send.now";
+    }
+
+    if (
+      host.includes("usersdrive")
+    ) {
+      return "UsersDrive";
+    }
+
+    return host;
+  } catch {
+    return "Favez0ne";
+  }
+}
+
+function cleanStreams(urls) {
+  return urls.map(
+    (url, index) => ({
+      name:
+        hostName(url),
+
+      title:
+        `${hostName(url)} | Favez0ne`,
+
+      url,
+
+      behaviorHints: {
+        notWebReady: true
+      }
+    })
+  );
+}
+
+/*
+====================================================
+STREAM ENDPOINT
 ====================================================
 */
 
@@ -444,9 +543,8 @@ app.get(
       */
 
       const cinemeta =
-        await getCinemeta(
-          type,
-          id
+        await getJson(
+          `${CM}/${type}/${id}.json`
         );
 
       const meta =
@@ -465,76 +563,24 @@ app.get(
           meta.year
         );
 
-      /*
-      2. Collect every useful name
-      */
-
-      const names = [];
-
-      for (
-        const value of [
-          meta.name,
-          meta.originalName,
-          meta.originalTitle,
-          meta.title
-        ]
-      ) {
-        if (
-          value &&
-          !names.includes(value)
-        ) {
-          names.push(value);
-        }
-      }
-
-      /*
-      3. TMDB ID from Cinemeta
-      */
-
-      const tmdbId =
-        meta.moviedb_id ||
-        meta.tmdb_id ||
-        meta.tmdbId;
-
-      /*
-      4. Try localized names
-      */
-
-      if (tmdbId) {
-        const tmdbNames =
-          await getTMDBNames(
-            tmdbId,
-            type
-          );
-
-        for (
-          const name of tmdbNames
-        ) {
-          if (
-            !names.includes(name)
-          ) {
-            names.push(name);
-          }
-        }
-      }
+      const names = [
+        meta.name,
+        meta.originalName,
+        meta.originalTitle
+      ].filter(Boolean);
 
       console.log(
         "CINEMETA:",
-        meta.name,
-        "YEAR:",
-        wantedYear,
-        "TMDB:",
-        tmdbId,
-        "NAMES:",
-        names
+        names,
+        wantedYear
       );
 
       /*
-      5. Find TVNetil item
+      2. Find TVNetil title
       */
 
       const item =
-        await searchCatalogByName(
+        await findTVNetilItem(
           type,
           names,
           wantedYear
@@ -542,8 +588,7 @@ app.get(
 
       if (!item?.id) {
         console.error(
-          "NO SAFE TVNETIL MATCH:",
-          names
+          "NO SAFE TVNETIL MATCH"
         );
 
         return res.json({
@@ -551,41 +596,65 @@ app.get(
         });
       }
 
-      console.log(
-        "TVNETIL MATCH:",
-        item.id,
+      const tvTitle =
         item.name ||
-          item.title
+        item.title;
+
+      const tvYear =
+        getItemYear(item);
+
+      console.log(
+        "TVNETIL TITLE:",
+        tvTitle,
+        tvYear
       );
 
       /*
-      6. Get streams
+      3. Build exact title for Favez0ne
       */
 
-      const streamUrl =
-        `${TV}/stream/${type}/${encodeURIComponent(
-          item.id
-        )}.json`;
+      let faveTitle =
+        tvTitle;
+
+      if (
+        tvYear &&
+        !extractYear(faveTitle)
+      ) {
+        faveTitle =
+          `${faveTitle} (${tvYear})`;
+      }
 
       console.log(
-        "STREAM URL:",
-        streamUrl
+        "FAVEZ0NE TITLE:",
+        faveTitle
       );
 
-      const streamData =
-        await getJson(
-          streamUrl
+      /*
+      4. Search Favez0ne
+      */
+
+      const html =
+        await searchFavez0ne(
+          faveTitle
         );
+
+      /*
+      5. Extract links
+      */
+
+      const urls =
+        extractFavezLinks(
+          html
+        );
+
+      console.log(
+        "FAVEZ0NE LINKS:",
+        urls.length,
+        urls
+      );
 
       const streams =
-        cleanStreams(
-          streamData?.streams
-        );
-
-      console.log(
-        "STREAM COUNT:",
-        streams.length
-      );
+        cleanStreams(urls);
 
       return res.json({
         streams
@@ -631,10 +700,13 @@ app.get(
         });
       }
 
+      /*
+      Cinemeta
+      */
+
       const cinemeta =
-        await getCinemeta(
-          type,
-          id
+        await getJson(
+          `${CM}/${type}/${id}.json`
         );
 
       const meta =
@@ -643,8 +715,7 @@ app.get(
       if (!meta?.name) {
         return res.json({
           success: false,
-          step: "cinemeta",
-          data: cinemeta
+          step: "cinemeta"
         });
       }
 
@@ -655,47 +726,18 @@ app.get(
           meta.year
         );
 
-      const tmdbId =
-        meta.moviedb_id ||
-        meta.tmdb_id ||
-        meta.tmdbId;
+      const names = [
+        meta.name,
+        meta.originalName,
+        meta.originalTitle
+      ].filter(Boolean);
 
-      const names = [];
-
-      for (
-        const value of [
-          meta.name,
-          meta.originalName,
-          meta.originalTitle,
-          meta.title
-        ]
-      ) {
-        if (
-          value &&
-          !names.includes(value)
-        ) {
-          names.push(value);
-        }
-      }
-
-      const localizedNames =
-        await getTMDBNames(
-          tmdbId,
-          type
-        );
-
-      for (
-        const name of localizedNames
-      ) {
-        if (
-          !names.includes(name)
-        ) {
-          names.push(name);
-        }
-      }
+      /*
+      TVNetil
+      */
 
       const item =
-        await searchCatalogByName(
+        await findTVNetilItem(
           type,
           names,
           wantedYear
@@ -703,36 +745,52 @@ app.get(
 
       if (!item?.id) {
         return res.json({
-          step:
-            "tvnetil-match",
           success: false,
-
+          step: "tvnetil-match",
           cinemeta: {
             id,
             names,
-            year: wantedYear,
-            tmdb: tmdbId
+            year: wantedYear
           },
-
           message:
             "No safe TVNetil title match found"
         });
       }
 
-      const streamUrl =
-        `${TV}/stream/${type}/${encodeURIComponent(
-          item.id
-        )}.json`;
+      const tvTitle =
+        item.name ||
+        item.title;
 
-      const streamData =
-        await getJson(
-          streamUrl
+      const tvYear =
+        getItemYear(item);
+
+      let faveTitle =
+        tvTitle;
+
+      if (
+        tvYear &&
+        !extractYear(faveTitle)
+      ) {
+        faveTitle =
+          `${faveTitle} (${tvYear})`;
+      }
+
+      /*
+      Favez0ne
+      */
+
+      const html =
+        await searchFavez0ne(
+          faveTitle
+        );
+
+      const urls =
+        extractFavezLinks(
+          html
         );
 
       const streams =
-        cleanStreams(
-          streamData?.streams
-        );
+        cleanStreams(urls);
 
       return res.json({
         success: true,
@@ -741,22 +799,27 @@ app.get(
           id,
           names,
           year: wantedYear,
-          tmdb: tmdbId
+          tmdb:
+            meta.moviedb_id || null
         },
 
-        match: {
+        tvnetil: {
           id: item.id,
-          name:
-            item.name ||
-            item.title,
-          year:
-            getItemYear(item)
+          name: tvTitle,
+          year: tvYear,
+          score:
+            score(
+              item,
+              names,
+              wantedYear
+            )
         },
 
-        streamUrl,
-
-        streamCount:
-          streams.length,
+        favezone: {
+          searchTitle: faveTitle,
+          linkCount: urls.length,
+          links: urls
+        },
 
         streams
       });
@@ -774,99 +837,43 @@ app.get(
 
 /*
 ====================================================
-SEARCH
+FAVEZ0NE DEBUG
 ====================================================
 */
 
 app.get(
-  "/search.json",
+  "/fave-debug",
   async (req, res) => {
-    const q =
-      normalize(
-        req.query.q || ""
+    const title =
+      String(
+        req.query.q ||
+        "בלאגן ביער (2025)"
       );
 
-    const type =
-      req.query.type === "series"
-        ? "series"
-        : "movie";
-
-    if (!q) {
-      return res.status(400).json({
-        error:
-          "Missing ?q= parameter"
-      });
-    }
-
-    const results = [];
-
     try {
-      for (
-        let skip = 0;
-        skip <= 10000;
-        skip += 100
-      ) {
-        const data =
-          await getCatalog(
-            type,
-            skip
-          );
+      const html =
+        await searchFavez0ne(
+          title
+        );
 
-        const metas =
-          Array.isArray(data.metas)
-            ? data.metas
-            : [];
-
-        if (!metas.length) {
-          break;
-        }
-
-        for (
-          const item of metas
-        ) {
-          const name =
-            normalize(
-              item.name ||
-              item.title
-            );
-
-          if (
-            name.includes(q) ||
-            q.includes(name)
-          ) {
-            results.push({
-              id: item.id,
-              name:
-                item.name ||
-                item.title,
-              year:
-                getItemYear(item)
-            });
-          }
-        }
-
-        if (
-          results.length >= 20
-        ) {
-          break;
-        }
-
-        if (
-          metas.length < 100
-        ) {
-          break;
-        }
-      }
+      const links =
+        extractFavezLinks(
+          html
+        );
 
       return res.json({
-        query: q,
-        type,
-        results
+        success: true,
+        query: title,
+        htmlLength:
+          html.length,
+        links
       });
 
     } catch (error) {
       return res.status(500).json({
-        error: error.message
+        success: false,
+        error:
+          error.message
       });
     }
   }
@@ -878,14 +885,11 @@ HOME
 ====================================================
 */
 
-app.get(
-  "/",
-  (_, res) => {
-    res.send(
-      "TVNetil Direct Streams v1.4.0 - LIVE"
-    );
-  }
-);
+app.get("/", (_, res) => {
+  res.send(
+    "TVNetil Direct Streams v1.4.0 - LIVE"
+  );
+});
 
 app.listen(
   process.env.PORT || 3000,
