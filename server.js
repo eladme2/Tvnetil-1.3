@@ -7,7 +7,7 @@ const CM = "https://v3-cinemeta.strem.io/meta";
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "1.3.1",
+  version: "1.3.2",
   name: "TVNetil Direct Streams",
   description: "TVNetil streams for Nuvio/Cinemeta",
   resources: ["stream"],
@@ -20,9 +20,11 @@ app.get("/manifest.json", (_, res) => {
 });
 
 async function getJson(url) {
+  console.log("GET:", url);
+
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "TVNetil-Nuvio-Addon/1.3.1",
+      "User-Agent": "TVNetil-Nuvio-Addon/1.3.2",
       "Accept": "application/json"
     }
   });
@@ -30,13 +32,17 @@ async function getJson(url) {
   const text = await response.text();
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+    throw new Error(
+      `HTTP ${response.status}: ${text.slice(0, 500)}`
+    );
   }
 
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`Invalid JSON from ${url}: ${text.slice(0, 300)}`);
+    throw new Error(
+      `Invalid JSON from ${url}: ${text.slice(0, 500)}`
+    );
   }
 }
 
@@ -55,21 +61,42 @@ function extractYear(value) {
   return match ? Number(match[0]) : null;
 }
 
+function getItemName(item) {
+  return (
+    item.name ||
+    item.title ||
+    item.meta?.name ||
+    item.meta?.title ||
+    ""
+  );
+}
+
+function getItemYear(item) {
+  return extractYear(
+    item.releaseInfo ||
+    item.releaseDate ||
+    item.year ||
+    item.meta?.releaseInfo ||
+    item.meta?.releaseDate ||
+    item.meta?.year
+  );
+}
+
 function score(item, wantedName, wantedYear) {
-  const itemName = normalize(item.name || item.title);
+  const itemName = normalize(getItemName(item));
   const wanted = normalize(wantedName);
 
   if (!itemName || !wanted) return -1;
 
-  let score = 0;
+  let points = 0;
 
   if (itemName === wanted) {
-    score += 100;
+    points += 100;
   } else if (
     itemName.includes(wanted) ||
     wanted.includes(itemName)
   ) {
-    score += 60;
+    points += 60;
   }
 
   const wantedWords = new Set(wanted.split(" "));
@@ -77,103 +104,151 @@ function score(item, wantedName, wantedYear) {
 
   for (const word of wantedWords) {
     if (word.length >= 2 && itemWords.has(word)) {
-      score += 8;
+      points += 8;
     }
   }
 
-  const itemYear = extractYear(
-    item.releaseInfo ||
-    item.releaseDate ||
-    item.year
-  );
+  const itemYear = getItemYear(item);
 
   if (wantedYear && itemYear) {
     if (itemYear === wantedYear) {
-      score += 40;
+      points += 40;
     } else if (Math.abs(itemYear - wantedYear) === 1) {
-      score += 10;
+      points += 10;
     } else {
-      score -= 30;
+      points -= 30;
     }
   }
 
-  return score;
+  return points;
+}
+
+/*
+ * TVNetil manifest:
+ *
+ * tvnetil_series  -> type movie
+ * tvnetil_movies  -> type movie
+ * tvnetil_others  -> type movie
+ *
+ * Therefore BOTH movie and series catalogs are requested
+ * using /catalog/movie/...
+ */
+
+async function getCatalog(catalogId, skip = 0) {
+  const url =
+    `${TV}/catalog/movie/${catalogId}.json?skip=${skip}`;
+
+  return await getJson(url);
 }
 
 async function findTVNetilItem(type, name, wantedYear) {
-  const catalog =
+  const catalogs =
     type === "series"
-      ? "tvnetil_series"
-      : "tvnetil_movies";
+      ? ["tvnetil_series"]
+      : ["tvnetil_movies"];
 
   let best = null;
   let bestScore = -1;
 
-  for (let skip = 0; skip <= 5000; skip += 100) {
-    const url =
-      `${TV}/catalog/${type}/${catalog}.json?skip=${skip}`;
+  for (const catalog of catalogs) {
+    for (let skip = 0; skip <= 5000; skip += 100) {
+      let data;
 
-    let data;
+      try {
+        data = await getCatalog(catalog, skip);
+      } catch (error) {
+        console.error(
+          "CATALOG ERROR:",
+          catalog,
+          skip,
+          error.message
+        );
+        break;
+      }
 
-    try {
-      data = await getJson(url);
-    } catch (error) {
-      console.error("CATALOG ERROR:", error.message);
-      break;
-    }
+      const metas = Array.isArray(data?.metas)
+        ? data.metas
+        : [];
 
-    const metas = Array.isArray(data.metas)
-      ? data.metas
-      : [];
-
-    if (!metas.length) break;
-
-    for (const item of metas) {
-      const currentScore = score(
-        item,
-        name,
-        wantedYear
+      console.log(
+        "CATALOG:",
+        catalog,
+        "SKIP:",
+        skip,
+        "COUNT:",
+        metas.length
       );
 
-      if (currentScore > bestScore) {
-        bestScore = currentScore;
-        best = item;
+      if (!metas.length) {
+        break;
       }
-    }
 
-    if (bestScore >= 140 || metas.length < 100) {
-      break;
+      for (const item of metas) {
+        const currentScore = score(
+          item,
+          name,
+          wantedYear
+        );
+
+        if (currentScore > bestScore) {
+          bestScore = currentScore;
+          best = item;
+        }
+      }
+
+      if (bestScore >= 140) {
+        break;
+      }
+
+      if (metas.length < 100) {
+        break;
+      }
     }
   }
 
   console.log(
-    "MATCH:",
+    "BEST MATCH:",
     name,
     "YEAR:",
     wantedYear,
     "RESULT:",
-    best?.name || best?.title,
+    best ? getItemName(best) : null,
+    "ID:",
+    best?.id,
     "SCORE:",
     bestScore
   );
 
-  return bestScore >= 75 ? best : null;
+  return bestScore >= 60 ? best : null;
 }
 
 function cleanStreams(streams) {
-  if (!Array.isArray(streams)) return [];
+  if (!Array.isArray(streams)) {
+    return [];
+  }
 
   return streams
-    .filter(stream => stream && stream.url)
+    .filter(stream => {
+      return (
+        stream &&
+        (
+          stream.url ||
+          stream.externalUrl
+        )
+      );
+    })
     .map((stream, index) => {
       const result = {
         name: stream.name || "TVNetil",
         title:
           stream.title ||
           stream.name ||
-          `TVNetil ${index + 1}`,
-        url: stream.url
+          `TVNetil ${index + 1}`
       };
+
+      if (stream.url) {
+        result.url = stream.url;
+      }
 
       if (stream.behaviorHints) {
         result.behaviorHints = stream.behaviorHints;
@@ -187,8 +262,65 @@ function cleanStreams(streams) {
     });
 }
 
+/*
+ * TVNetil uses IDs beginning with tvnetil_.
+ *
+ * The stream endpoint is still requested with the
+ * item's real TVNetil ID.
+ */
+
+async function getTVNetilStreams(type, item) {
+  if (!item?.id) {
+    return [];
+  }
+
+  const tvnetilId = item.id;
+
+  /*
+   * TVNetil exposes movie-type stream endpoints.
+   * Even when the source comes from tvnetil_series,
+   * its manifest declares the resource type as movie.
+   */
+
+  const urls = [
+    `${TV}/stream/movie/${encodeURIComponent(tvnetilId)}.json`,
+    `${TV}/stream/series/${encodeURIComponent(tvnetilId)}.json`
+  ];
+
+  for (const url of urls) {
+    try {
+      const data = await getJson(url);
+
+      const streams = cleanStreams(data?.streams);
+
+      console.log(
+        "STREAM TEST:",
+        url,
+        "COUNT:",
+        streams.length
+      );
+
+      if (streams.length) {
+        return streams;
+      }
+    } catch (error) {
+      console.error(
+        "STREAM ERROR:",
+        url,
+        error.message
+      );
+    }
+  }
+
+  return [];
+}
+
 app.get("/stream/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
+
+  console.log(
+    "===================================="
+  );
 
   console.log(
     "STREAM REQUEST:",
@@ -206,7 +338,11 @@ app.get("/stream/:type/:id.json", async (req, res) => {
   }
 
   try {
-    // Get metadata from Cinemeta
+    /*
+     * STEP 1
+     * Get IMDb metadata from Cinemeta.
+     */
+
     const cinemeta = await getJson(
       `${CM}/${type}/${id}.json`
     );
@@ -214,7 +350,10 @@ app.get("/stream/:type/:id.json", async (req, res) => {
     const meta = cinemeta?.meta;
 
     if (!meta?.name) {
-      console.error("NO CINEMETA META:", id);
+      console.error(
+        "NO CINEMETA META:",
+        id
+      );
 
       return res.json({
         streams: []
@@ -232,10 +371,15 @@ app.get("/stream/:type/:id.json", async (req, res) => {
     console.log(
       "CINEMETA:",
       wantedName,
+      "YEAR:",
       wantedYear
     );
 
-    // Find matching item in TVNetil
+    /*
+     * STEP 2
+     * Find the same title inside TVNetil.
+     */
+
     const item = await findTVNetilItem(
       type,
       wantedName,
@@ -256,22 +400,26 @@ app.get("/stream/:type/:id.json", async (req, res) => {
     console.log(
       "TVNETIL MATCH:",
       item.id,
-      item.name || item.title
+      getItemName(item)
     );
 
-    // Get streams
-    const streamUrl =
-      `${TV}/stream/${type}/${encodeURIComponent(item.id)}.json`;
+    /*
+     * STEP 3
+     * Get actual streams.
+     */
 
-    const streamData = await getJson(streamUrl);
-
-    const streams = cleanStreams(
-      streamData?.streams
+    const streams = await getTVNetilStreams(
+      type,
+      item
     );
 
     console.log(
-      "STREAM COUNT:",
+      "FINAL STREAM COUNT:",
       streams.length
+    );
+
+    console.log(
+      "===================================="
     );
 
     return res.json({
@@ -280,7 +428,7 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 
   } catch (error) {
     console.error(
-      "STREAM ERROR:",
+      "FATAL STREAM ERROR:",
       error.stack || error.message
     );
 
@@ -290,7 +438,13 @@ app.get("/stream/:type/:id.json", async (req, res) => {
   }
 });
 
-// Debug endpoint
+/*
+ * DEBUG
+ *
+ * Example:
+ * /debug/movie/tt1234567.json
+ */
+
 app.get("/debug/:type/:id.json", async (req, res) => {
   const { type, id } = req.params;
 
@@ -300,9 +454,14 @@ app.get("/debug/:type/:id.json", async (req, res) => {
       !/^tt\d+$/.test(id)
     ) {
       return res.status(400).json({
+        success: false,
         error: "Invalid type or IMDb ID"
       });
     }
+
+    /*
+     * Cinemeta
+     */
 
     const cinemeta = await getJson(
       `${CM}/${type}/${id}.json`
@@ -312,8 +471,9 @@ app.get("/debug/:type/:id.json", async (req, res) => {
 
     if (!meta?.name) {
       return res.json({
-        step: "cinemeta",
         success: false,
+        step: "cinemeta",
+        id,
         data: cinemeta
       });
     }
@@ -324,6 +484,10 @@ app.get("/debug/:type/:id.json", async (req, res) => {
       meta.year
     );
 
+    /*
+     * TVNetil match
+     */
+
     const item = await findTVNetilItem(
       type,
       meta.name,
@@ -332,8 +496,8 @@ app.get("/debug/:type/:id.json", async (req, res) => {
 
     if (!item?.id) {
       return res.json({
-        step: "tvnetil-match",
         success: false,
+        step: "tvnetil-match",
         cinemeta: {
           id,
           name: meta.name,
@@ -342,39 +506,54 @@ app.get("/debug/:type/:id.json", async (req, res) => {
       });
     }
 
-    const streamUrl =
-      `${TV}/stream/${type}/${encodeURIComponent(item.id)}.json`;
+    /*
+     * Streams
+     */
 
-    const streamData = await getJson(streamUrl);
+    const streams = await getTVNetilStreams(
+      type,
+      item
+    );
 
     return res.json({
-      success: true,
+      success: streams.length > 0,
+      step: "complete",
+
       cinemeta: {
         id,
         name: meta.name,
         year: wantedYear
       },
+
       match: {
         id: item.id,
-        name: item.name || item.title
+        name: getItemName(item),
+        year: getItemYear(item)
       },
-      streamUrl,
-      streams: cleanStreams(streamData?.streams)
+
+      streams
     });
 
   } catch (error) {
     return res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      stack: error.stack
     });
   }
 });
 
 app.get("/", (_, res) => {
-  res.send("TVNetil Direct Streams v1.3.1 - LIVE");
+  res.send(
+    "TVNetil Direct Streams v1.3.2 - LIVE"
+  );
 });
 
 app.listen(
   process.env.PORT || 3000,
-  () => console.log("TVNetil Direct Streams v1.3.1 started")
+  () => {
+    console.log(
+      "TVNetil Direct Streams v1.3.2 started"
+    );
+  }
 );
