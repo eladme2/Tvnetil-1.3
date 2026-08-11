@@ -7,7 +7,7 @@ const CM = "https://v3-cinemeta.strem.io/meta";
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "1.4.0",
+  version: "1.3.3",
   name: "TVNetil Direct Streams",
   description: "TVNetil streams for Nuvio/Cinemeta",
   resources: ["stream"],
@@ -22,7 +22,7 @@ app.get("/manifest.json", (_, res) => {
 async function getJson(url) {
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "TVNetil-Nuvio-Addon/1.4.0",
+      "User-Agent": "TVNetil-Nuvio-Addon/1.3.3",
       "Accept": "application/json"
     }
   });
@@ -66,142 +66,198 @@ function getItemYear(item) {
     item.releaseInfo ||
     item.releaseDate ||
     item.year ||
+    item.description ||
     item.name ||
-    item.title ||
-    item.description
+    item.title
   );
 }
 
-function getItemNames(item) {
-  return [
+/*
+====================================================
+NAME MATCHING
+====================================================
+*/
+
+function getNames(item) {
+  const names = [
     item.name,
     item.title,
     item.originalName,
-    item.originalTitle
-  ]
+    item.originalTitle,
+    item.enName,
+    item.englishName
+  ];
+
+  return names
     .filter(Boolean)
-    .map(normalize);
+    .map(normalize)
+    .filter(Boolean);
 }
 
-function scoreName(item, wantedNames) {
-  const itemNames = getItemNames(item);
+function removeYear(name) {
+  return normalize(name)
+    .replace(/\b(19|20)\d{2}\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  if (!itemNames.length) {
-    return 0;
-  }
+function namesMatch(item, wantedNames) {
+  const itemNames = getNames(item);
 
-  let best = 0;
+  const wanted = wantedNames
+    .filter(Boolean)
+    .map(normalize)
+    .filter(Boolean);
 
   for (const itemName of itemNames) {
-    for (const wantedRaw of wantedNames) {
-      const wanted = normalize(wantedRaw);
+    const cleanItem = removeYear(itemName);
 
-      if (!wanted || !itemName) {
+    for (const wantedName of wanted) {
+      const cleanWanted = removeYear(wantedName);
+
+      if (!cleanItem || !cleanWanted) {
         continue;
       }
 
-      // Exact
-      if (itemName === wanted) {
-        best = Math.max(best, 180);
-        continue;
+      /*
+      Exact match
+      */
+      if (cleanItem === cleanWanted) {
+        return true;
       }
 
-      // Remove year from names for comparison
-      const itemWithoutYear = itemName
-        .replace(/\b(19|20)\d{2}\b/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      const wantedWithoutYear = wanted
-        .replace(/\b(19|20)\d{2}\b/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
+      /*
+      One name contains the other ONLY if
+      the shorter name has at least 4 characters.
+      */
 
       if (
-        itemWithoutYear &&
-        wantedWithoutYear &&
-        itemWithoutYear === wantedWithoutYear
+        cleanItem.length >= 4 &&
+        cleanWanted.length >= 4 &&
+        (
+          cleanItem.includes(cleanWanted) ||
+          cleanWanted.includes(cleanItem)
+        )
       ) {
-        best = Math.max(best, 170);
-        continue;
+        return true;
       }
 
-      // Partial
+      /*
+      Compare individual words.
+      Require a meaningful amount of overlap.
+      */
+
+      const a = new Set(cleanItem.split(" "));
+      const b = new Set(cleanWanted.split(" "));
+
+      const common = [...a].filter(
+        word =>
+          word.length >= 3 &&
+          b.has(word)
+      );
+
       if (
-        itemName.includes(wanted) ||
-        wanted.includes(itemName)
+        common.length >= 2
       ) {
-        best = Math.max(best, 120);
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function score(item, wantedNames, wantedYear) {
+  const itemNames = getNames(item);
+
+  if (!itemNames.length) {
+    return -1;
+  }
+
+  const wanted = wantedNames
+    .filter(Boolean)
+    .map(normalize)
+    .filter(Boolean);
+
+  let bestNameScore = -1;
+
+  for (const itemName of itemNames) {
+    const cleanItem = removeYear(itemName);
+
+    for (const wantedName of wanted) {
+      const cleanWanted = removeYear(wantedName);
+
+      if (!cleanItem || !cleanWanted) {
         continue;
       }
 
-      // Word matching
-      const wantedWords =
-        new Set(wantedWithoutYear.split(" "));
+      let current = 0;
 
-      const itemWords =
-        new Set(itemWithoutYear.split(" "));
+      if (cleanItem === cleanWanted) {
+        current = 200;
+      } else if (
+        cleanItem.length >= 4 &&
+        cleanWanted.length >= 4 &&
+        (
+          cleanItem.includes(cleanWanted) ||
+          cleanWanted.includes(cleanItem)
+        )
+      ) {
+        current = 130;
+      } else {
+        const a = new Set(cleanItem.split(" "));
+        const b = new Set(cleanWanted.split(" "));
 
-      let matchedWords = 0;
+        const common = [...a].filter(
+          word =>
+            word.length >= 3 &&
+            b.has(word)
+        );
 
-      for (const word of wantedWords) {
-        if (
-          word.length >= 2 &&
-          itemWords.has(word)
-        ) {
-          matchedWords++;
+        if (common.length >= 2) {
+          current = 100 + common.length * 10;
         }
       }
 
-      if (matchedWords > 0) {
-        best = Math.max(
-          best,
-          matchedWords * 20
-        );
-      }
+      bestNameScore = Math.max(
+        bestNameScore,
+        current
+      );
     }
   }
 
-  return best;
-}
+  /*
+  IMPORTANT:
+  Year is only a bonus.
+  Year can NEVER create a match by itself.
+  */
 
-function scoreItem(item, wantedNames, wantedYear) {
-  let result =
-    scoreName(item, wantedNames);
+  if (bestNameScore < 100) {
+    return -1;
+  }
 
-  const itemYear =
-    getItemYear(item);
+  const itemYear = getItemYear(item);
 
   if (wantedYear && itemYear) {
     if (itemYear === wantedYear) {
-      result += 80;
+      bestNameScore += 40;
     } else if (
       Math.abs(itemYear - wantedYear) === 1
     ) {
-      result += 20;
+      bestNameScore += 5;
     } else {
-      result -= 70;
+      bestNameScore -= 30;
     }
   }
 
-  // Extra search in description
-  const description =
-    normalize(item.description);
-
-  for (const wantedRaw of wantedNames) {
-    const wanted =
-      normalize(wantedRaw);
-
-    if (
-      wanted &&
-      description.includes(wanted)
-    ) {
-      result += 10;
-    }
-  }
-
-  return result;
+  return bestNameScore;
 }
+
+/*
+====================================================
+CATALOG
+====================================================
+*/
 
 async function getCatalog(type, skip) {
   const catalog =
@@ -214,6 +270,12 @@ async function getCatalog(type, skip) {
 
   return await getJson(url);
 }
+
+/*
+====================================================
+FIND TVNETIL ITEM
+====================================================
+*/
 
 async function findTVNetilItem(
   type,
@@ -230,26 +292,18 @@ async function findTVNetilItem(
     wantedYear
   );
 
-  /*
-   * Search the complete catalog.
-   *
-   * We intentionally continue through all available
-   * pages instead of stopping after finding a weak match.
-   */
-
   for (
     let skip = 0;
-    skip <= 30000;
+    skip <= 10000;
     skip += 100
   ) {
     let data;
 
     try {
-      data =
-        await getCatalog(
-          type,
-          skip
-        );
+      data = await getCatalog(
+        type,
+        skip
+      );
     } catch (error) {
       console.error(
         "CATALOG ERROR:",
@@ -270,7 +324,7 @@ async function findTVNetilItem(
 
     for (const item of metas) {
       const currentScore =
-        scoreItem(
+        score(
           item,
           wantedNames,
           wantedYear
@@ -279,20 +333,8 @@ async function findTVNetilItem(
       if (
         currentScore > bestScore
       ) {
-        bestScore =
-          currentScore;
-
+        bestScore = currentScore;
         best = item;
-
-        console.log(
-          "NEW BEST:",
-          item.id,
-          item.name || item.title,
-          "YEAR:",
-          getItemYear(item),
-          "SCORE:",
-          bestScore
-        );
       }
     }
 
@@ -302,29 +344,20 @@ async function findTVNetilItem(
       "ITEMS:",
       metas.length,
       "BEST:",
-      best?.name ||
-        best?.title,
+      best?.name || best?.title,
       "SCORE:",
       bestScore
     );
 
     /*
-     * A very strong exact match with matching year.
-     */
-    if (
-      bestScore >= 260 &&
-      getItemYear(best) === wantedYear
-    ) {
+    Exact/very strong match.
+    */
+
+    if (bestScore >= 200) {
       break;
     }
 
-    /*
-     * TVNetil normally returns 100 items per page.
-     * If fewer are returned, this is the final page.
-     */
-    if (
-      metas.length < 100
-    ) {
+    if (metas.length < 100) {
       break;
     }
   }
@@ -332,29 +365,48 @@ async function findTVNetilItem(
   console.log(
     "FINAL MATCH:",
     best?.id,
-    best?.name ||
-      best?.title,
-    "YEAR:",
-    getItemYear(best),
+    best?.name || best?.title,
     "SCORE:",
     bestScore
   );
 
   /*
-   * Require a reasonable match.
-   */
+  VERY IMPORTANT:
+  Never return a weak match.
+  */
+
   if (
     !best ||
-    bestScore < 80
+    bestScore < 100
   ) {
     return null;
   }
 
-  return {
-    item: best,
-    score: bestScore
-  };
+  /*
+  Final safety check.
+  */
+
+  if (
+    !namesMatch(
+      best,
+      wantedNames
+    )
+  ) {
+    console.log(
+      "FINAL NAME CHECK FAILED"
+    );
+
+    return null;
+  }
+
+  return best;
 }
+
+/*
+====================================================
+STREAM CLEANUP
+====================================================
+*/
 
 function cleanStreams(streams) {
   if (!Array.isArray(streams)) {
@@ -368,38 +420,32 @@ function cleanStreams(streams) {
         typeof stream.url === "string" &&
         stream.url.length > 0
     )
-    .map(
-      (stream, index) => {
-        const result = {
-          name:
-            stream.name ||
-            "TVNetil",
+    .map((stream, index) => {
+      const result = {
+        name:
+          stream.name ||
+          "TVNetil",
 
-          title:
-            stream.title ||
-            stream.name ||
-            `TVNetil ${index + 1}`,
+        title:
+          stream.title ||
+          stream.name ||
+          `TVNetil ${index + 1}`,
 
-          url: stream.url
-        };
+        url: stream.url
+      };
 
-        if (
-          stream.behaviorHints
-        ) {
-          result.behaviorHints =
-            stream.behaviorHints;
-        }
-
-        if (
-          stream.externalUrl
-        ) {
-          result.externalUrl =
-            stream.externalUrl;
-        }
-
-        return result;
+      if (stream.behaviorHints) {
+        result.behaviorHints =
+          stream.behaviorHints;
       }
-    );
+
+      if (stream.externalUrl) {
+        result.externalUrl =
+          stream.externalUrl;
+      }
+
+      return result;
+    });
 }
 
 /*
@@ -423,8 +469,7 @@ app.get(
     );
 
     if (
-      !["movie", "series"]
-        .includes(type) ||
+      !["movie", "series"].includes(type) ||
       !/^tt\d+$/.test(id)
     ) {
       return res.json({
@@ -434,8 +479,8 @@ app.get(
 
     try {
       /*
-       * Get Cinemeta metadata.
-       */
+      Get Cinemeta metadata
+      */
 
       const cinemeta =
         await getJson(
@@ -456,6 +501,27 @@ app.get(
         });
       }
 
+      /*
+      Build all useful names.
+      */
+
+      const wantedNames = [
+        meta.name,
+        meta.originalName,
+        meta.originalTitle,
+        meta.englishName
+      ].filter(Boolean);
+
+      /*
+      Add IMDb ID / TMDB ID only for logging.
+      */
+
+      const tmdbId =
+        meta.moviedb_id ||
+        meta.tmdb_id ||
+        meta.tmdbId ||
+        null;
+
       const wantedYear =
         extractYear(
           meta.releaseInfo ||
@@ -463,41 +529,31 @@ app.get(
           meta.year
         );
 
-      /*
-       * Build all useful names.
-       */
-
-      const wantedNames = [
-        meta.name,
-        meta.originalName,
-        meta.originalTitle,
-        meta.title
-      ].filter(Boolean);
-
       console.log(
         "CINEMETA:",
         wantedNames,
         "YEAR:",
         wantedYear,
         "TMDB:",
-        meta.moviedb_id
+        tmdbId
       );
 
       /*
-       * Find TVNetil item.
-       */
+      Find exact TVNetil title match.
+      */
 
-      const match =
+      const item =
         await findTVNetilItem(
           type,
           wantedNames,
           wantedYear
         );
 
-      if (!match?.item?.id) {
+      if (!item?.id) {
         console.error(
-          "NO TVNETIL MATCH:",
-          wantedNames
+          "NO SAFE TVNETIL MATCH:",
+          wantedNames,
+          wantedYear
         );
 
         return res.json({
@@ -505,21 +561,15 @@ app.get(
         });
       }
 
-      const item =
-        match.item;
-
       console.log(
         "TVNETIL MATCH:",
         item.id,
-        item.name ||
-          item.title,
-        "SCORE:",
-        match.score
+        item.name || item.title
       );
 
       /*
-       * Get TVNetil streams.
-       */
+      Get TVNetil streams
+      */
 
       const streamUrl =
         `${TV}/stream/${type}/${encodeURIComponent(
@@ -595,7 +645,7 @@ app.get(
     try {
       for (
         let skip = 0;
-        skip <= 30000;
+        skip <= 10000;
         skip += 100
       ) {
         const data =
@@ -615,22 +665,26 @@ app.get(
 
         for (const item of metas) {
           const names =
-            getItemNames(item);
+            getNames(item);
 
-          const description =
-            normalize(
-              item.description
-            );
+          const matched =
+            names.some(name => {
+              const clean =
+                removeYear(name);
 
-          const found =
-            names.some(
-              name =>
-                name.includes(q) ||
-                q.includes(name)
-            ) ||
-            description.includes(q);
+              return (
+                clean === q ||
+                (
+                  clean.length >= 4 &&
+                  (
+                    clean.includes(q) ||
+                    q.includes(clean)
+                  )
+                )
+              );
+            });
 
-          if (found) {
+          if (matched) {
             results.push({
               id: item.id,
               name:
@@ -638,18 +692,13 @@ app.get(
                 item.title,
               year:
                 getItemYear(item),
-              score:
-                scoreItem(
-                  item,
-                  [q],
-                  extractYear(q)
-                )
+              names
             });
           }
         }
 
         if (
-          results.length >= 50
+          results.length >= 20
         ) {
           break;
         }
@@ -703,8 +752,8 @@ app.get(
       }
 
       /*
-       * Cinemeta
-       */
+      Cinemeta
+      */
 
       const cinemeta =
         await getJson(
@@ -716,13 +765,18 @@ app.get(
 
       if (!meta?.name) {
         return res.json({
-          step:
-            "cinemeta",
+          step: "cinemeta",
           success: false,
-          data:
-            cinemeta
+          data: cinemeta
         });
       }
+
+      const wantedNames = [
+        meta.name,
+        meta.originalName,
+        meta.originalTitle,
+        meta.englishName
+      ].filter(Boolean);
 
       const wantedYear =
         extractYear(
@@ -731,25 +785,24 @@ app.get(
           meta.year
         );
 
-      const wantedNames = [
-        meta.name,
-        meta.originalName,
-        meta.originalTitle,
-        meta.title
-      ].filter(Boolean);
+      const tmdbId =
+        meta.moviedb_id ||
+        meta.tmdb_id ||
+        meta.tmdbId ||
+        null;
 
       /*
-       * TVNetil match
-       */
+      TVNetil match
+      */
 
-      const match =
+      const item =
         await findTVNetilItem(
           type,
           wantedNames,
           wantedYear
         );
 
-      if (!match?.item?.id) {
+      if (!item?.id) {
         return res.json({
           step:
             "tvnetil-match",
@@ -757,25 +810,19 @@ app.get(
 
           cinemeta: {
             id,
-            names:
-              wantedNames,
-            year:
-              wantedYear,
-            tmdb:
-              meta.moviedb_id
+            names: wantedNames,
+            year: wantedYear,
+            tmdb: tmdbId
           },
 
           message:
-            "No suitable TVNetil catalog match found"
+            "No safe TVNetil title match found"
         });
       }
 
-      const item =
-        match.item;
-
       /*
-       * Streams
-       */
+      Streams
+      */
 
       const streamUrl =
         `${TV}/stream/${type}/${encodeURIComponent(
@@ -797,27 +844,24 @@ app.get(
 
         cinemeta: {
           id,
-          names:
-            wantedNames,
-          year:
-            wantedYear,
-          tmdb:
-            meta.moviedb_id
+          names: wantedNames,
+          year: wantedYear,
+          tmdb: tmdbId
         },
 
         match: {
-          id:
-            item.id,
-
+          id: item.id,
           name:
             item.name ||
             item.title,
-
           year:
             getItemYear(item),
-
           score:
-            match.score
+            score(
+              item,
+              wantedNames,
+              wantedYear
+            )
         },
 
         streamUrl,
@@ -848,7 +892,7 @@ app.get(
   "/",
   (_, res) => {
     res.send(
-      "TVNetil Direct Streams v1.4.0 - LIVE"
+      "TVNetil Direct Streams v1.3.3 - LIVE"
     );
   }
 );
@@ -857,6 +901,6 @@ app.listen(
   process.env.PORT || 3000,
   () =>
     console.log(
-      "TVNetil Direct Streams v1.4.0 started"
+      "TVNetil Direct Streams v1.3.3 started"
     )
 );
