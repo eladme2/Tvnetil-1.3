@@ -10,23 +10,23 @@ const TV = "https://tvnetil-addon.vercel.app";
 const CM = "https://v3-cinemeta.strem.io/meta";
 const FAVE = "https://www.favez0ne.net/search.php";
 
-const TMDB_API_KEY =
-  "39e6950a7ffa18878e6428b3b708351f";
-
-/* =========================================================
-   MANIFEST
-========================================================= */
+/* TMDB API KEY */
+const TMDB_KEY = "39e6950a7ffa18878e6428b3b708351f";
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
   version: "1.6.0",
   name: "TVNetil Direct Streams",
   description:
-    "TVNetil Hebrew title -> Favez0ne streams for Nuvio/Cinemeta",
+    "Hebrew TVNetil title matching for Nuvio/Cinemeta",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
+
+/* =========================================================
+   MANIFEST
+========================================================= */
 
 app.get("/manifest.json", (_, res) => {
   res.json(MANIFEST);
@@ -39,12 +39,11 @@ app.get("/manifest.json", (_, res) => {
 async function getText(url, options = {}) {
   const response = await fetch(url, {
     ...options,
-
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
 
-      "Accept":
+      Accept:
         "text/html,application/xhtml+xml,application/xml,application/json,*/*",
 
       ...(options.headers || {})
@@ -65,9 +64,8 @@ async function getText(url, options = {}) {
 async function getJson(url, options = {}) {
   const text = await getText(url, {
     ...options,
-
     headers: {
-      "Accept": "application/json",
+      Accept: "application/json",
       ...(options.headers || {})
     }
   });
@@ -82,7 +80,7 @@ async function getJson(url, options = {}) {
 }
 
 /* =========================================================
-   TEXT
+   TEXT HELPERS
 ========================================================= */
 
 function normalize(value) {
@@ -114,180 +112,116 @@ function getItemYear(item) {
 }
 
 /* =========================================================
-   TMDB
+   CINEMETA
 ========================================================= */
 
-async function findTMDBByIMDb(
-  imdbId,
-  type
-) {
-  console.log(
-    "TMDB FIND:",
-    imdbId,
-    type
+async function getCinemeta(type, imdbId) {
+  return getJson(
+    `${CM}/${type}/${imdbId}.json`
   );
-
-  const url =
-    `https://api.themoviedb.org/3/find/` +
-    `${encodeURIComponent(imdbId)}` +
-    `?api_key=${encodeURIComponent(TMDB_API_KEY)}` +
-    `&external_source=imdb_id` +
-    `&language=he-IL`;
-
-  const data =
-    await getJson(url);
-
-  console.log(
-    "TMDB RESULT:",
-    JSON.stringify(data)
-  );
-
-  if (type === "movie") {
-    return data.movie_results?.[0] || null;
-  }
-
-  if (type === "series") {
-    return data.tv_results?.[0] || null;
-  }
-
-  return null;
 }
 
 /* =========================================================
-   TMDB HEBREW TITLE
+   TMDB
 ========================================================= */
 
-async function getHebrewTitle(
-  imdbId,
+/*
+  מקבל TMDB ID ומחזיר את הכותרת העברית.
+*/
+
+async function getTMDBHebrewTitle(
   type,
-  cinemetaMeta
+  tmdbId
 ) {
-  let tmdb = null;
+  if (!TMDB_KEY || !tmdbId) {
+    return null;
+  }
+
+  const endpoint =
+    type === "series"
+      ? "tv"
+      : "movie";
+
+  const url =
+    `https://api.themoviedb.org/3/${endpoint}/${tmdbId}` +
+    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+    `&language=he-IL`;
+
+  console.log(
+    "TMDB HEBREW REQUEST:",
+    url.replace(TMDB_KEY, "***")
+  );
 
   try {
-    tmdb =
-      await findTMDBByIMDb(
-        imdbId,
-        type
-      );
+    const data =
+      await getJson(url);
+
+    const title =
+      type === "series"
+        ? data.name
+        : data.title;
+
+    console.log(
+      "TMDB HEBREW TITLE:",
+      title
+    );
+
+    return title || null;
+
   } catch (error) {
     console.error(
       "TMDB ERROR:",
       error.message
     );
+
+    return null;
+  }
+}
+
+/*
+  במקרה שאין TMDB ID ב-Cinemeta,
+  ננסה למצוא אותו לפי IMDb.
+*/
+
+async function findTMDBByIMDb(
+  type,
+  imdbId
+) {
+  if (!TMDB_KEY) {
+    return null;
   }
 
-  let title = null;
+  const url =
+    `https://api.themoviedb.org/3/find/${imdbId}` +
+    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+    `&external_source=imdb_id`;
 
-  if (tmdb) {
-    if (type === "movie") {
-      title =
-        tmdb.title ||
-        tmdb.original_title ||
-        null;
+  try {
+    const data =
+      await getJson(url);
+
+    const list =
+      type === "series"
+        ? data.tv_results
+        : data.movie_results;
+
+    if (
+      Array.isArray(list) &&
+      list.length > 0
+    ) {
+      return list[0].id;
     }
 
-    if (type === "series") {
-      title =
-        tmdb.name ||
-        tmdb.original_name ||
-        null;
-    }
-  }
+    return null;
 
-  /*
-   If TMDB did not return a Hebrew title,
-   don't accidentally search FaveZone with
-   the English Cinemeta title.
-  */
-
-  if (
-    title &&
-    /[\u0590-\u05FF]/.test(title)
-  ) {
-    return {
-      title,
-      tmdb
-    };
-  }
-
-  /*
-   Some TMDB records may not contain Hebrew.
-   Try TMDB details explicitly with he-IL.
-  */
-
-  if (tmdb?.id) {
-    try {
-      const endpoint =
-        type === "movie"
-          ? "movie"
-          : "tv";
-
-      const details =
-        await getJson(
-          `https://api.themoviedb.org/3/` +
-          `${endpoint}/${tmdb.id}` +
-          `?api_key=${encodeURIComponent(TMDB_API_KEY)}` +
-          `&language=he-IL`
-        );
-
-      const translated =
-        type === "movie"
-          ? details.title
-          : details.name;
-
-      if (
-        translated &&
-        /[\u0590-\u05FF]/.test(
-          translated
-        )
-      ) {
-        return {
-          title: translated,
-          tmdb: {
-            ...tmdb,
-            ...details
-          }
-        };
-      }
-    } catch (error) {
-      console.error(
-        "TMDB DETAILS ERROR:",
-        error.message
-      );
-    }
-  }
-
-  /*
-   Final fallback:
-   Cinemeta may itself contain Hebrew.
-  */
-
-  const cinemetaCandidates = [
-    cinemetaMeta?.name,
-    cinemetaMeta?.originalName,
-    cinemetaMeta?.originalTitle
-  ].filter(Boolean);
-
-  const hebrewCandidate =
-    cinemetaCandidates.find(
-      x =>
-        /[\u0590-\u05FF]/.test(
-          String(x)
-        )
+  } catch (error) {
+    console.error(
+      "TMDB FIND ERROR:",
+      error.message
     );
 
-  if (hebrewCandidate) {
-    return {
-      title: hebrewCandidate,
-      tmdb
-    };
+    return null;
   }
-
-  return {
-    title: null,
-    tmdb
-  };
 }
 
 /* =========================================================
@@ -311,7 +245,7 @@ async function getCatalog(
     url
   );
 
-  return await getJson(url);
+  return getJson(url);
 }
 
 /* =========================================================
@@ -375,10 +309,6 @@ async function searchTVNetilCatalog(
         continue;
       }
 
-      /*
-       Exact / contains
-      */
-
       if (
         name === wanted ||
         name.includes(wanted) ||
@@ -388,29 +318,25 @@ async function searchTVNetilCatalog(
         continue;
       }
 
-      /*
-       Hebrew word matching
-      */
-
       const wantedWords =
         wanted
           .split(" ")
-          .filter(
-            x => x.length >= 2
-          );
+          .filter(x => x.length >= 2);
+
+      if (!wantedWords.length) {
+        continue;
+      }
 
       const matched =
         wantedWords.filter(
-          word =>
-            name.includes(word)
+          word => name.includes(word)
         ).length;
 
       if (
-        wantedWords.length > 0 &&
         matched >=
-          Math.ceil(
-            wantedWords.length * 0.6
-          )
+        Math.ceil(
+          wantedWords.length * 0.6
+        )
       ) {
         results.push(item);
       }
@@ -425,53 +351,62 @@ async function searchTVNetilCatalog(
 }
 
 /* =========================================================
-   TVNETIL MATCH FROM HEBREW TITLE
+   SCORE TVNETIL RESULT
 ========================================================= */
 
-async function findTVNetilHebrewItem(
-  type,
-  hebrewTitle,
+function scoreTVNetil(
+  item,
+  wantedNames,
   wantedYear
 ) {
-  console.log(
-    "TVNETIL HEBREW SEARCH:",
-    hebrewTitle,
-    wantedYear
-  );
-
-  const results =
-    await searchTVNetilCatalog(
-      type,
-      hebrewTitle,
-      100
+  const itemName =
+    normalize(
+      item.name ||
+      item.title ||
+      item.originalName ||
+      item.originalTitle
     );
 
-  if (!results.length) {
-    return null;
+  if (!itemName) {
+    return -1;
   }
 
-  const wanted =
-    normalize(hebrewTitle);
+  let best = -1;
 
-  let best = null;
-  let bestScore = -1;
+  for (const rawName of wantedNames) {
+    const wanted =
+      normalize(rawName);
 
-  for (const item of results) {
-    const name =
-      normalize(
-        item.name ||
-        item.title
+    if (!wanted) {
+      continue;
+    }
+
+    let score = 0;
+
+    if (itemName === wanted) {
+      score += 300;
+    } else if (
+      itemName.includes(wanted) ||
+      wanted.includes(itemName)
+    ) {
+      score += 150;
+    }
+
+    const wantedWords =
+      wanted.split(" ");
+
+    const itemWords =
+      new Set(
+        itemName.split(" ")
       );
 
-    let current = 0;
-
-    if (name === wanted) {
-      current += 300;
-    } else if (
-      name.includes(wanted) ||
-      wanted.includes(name)
-    ) {
-      current += 200;
+    for (const word of wantedWords) {
+      if (
+        word.length >= 2 &&
+        itemWords.has(word)
+      ) {
+        score += 15;
+      }
     }
 
     const itemYear =
@@ -484,34 +419,92 @@ async function findTVNetilHebrewItem(
       if (
         wantedYear === itemYear
       ) {
-        current += 100;
+        score += 80;
       } else if (
         Math.abs(
           wantedYear - itemYear
         ) === 1
       ) {
-        current += 20;
+        score += 10;
       } else {
-        current -= 100;
+        score -= 100;
       }
     }
 
-    if (
-      current > bestScore
-    ) {
-      bestScore = current;
+    best =
+      Math.max(
+        best,
+        score
+      );
+  }
+
+  return best;
+}
+
+/* =========================================================
+   FIND TVNETIL BY HEBREW TITLE
+========================================================= */
+
+async function findTVNetilByHebrew(
+  type,
+  hebrewTitle,
+  wantedYear
+) {
+  console.log(
+    "TVNETIL HEBREW SEARCH:",
+    hebrewTitle
+  );
+
+  const results =
+    await searchTVNetilCatalog(
+      type,
+      hebrewTitle
+    );
+
+  console.log(
+    "TVNETIL SEARCH RESULTS:",
+    results.length
+  );
+
+  if (!results.length) {
+    return null;
+  }
+
+  let best = null;
+  let bestScore = -1;
+
+  for (const item of results) {
+    const s =
+      scoreTVNetil(
+        item,
+        [hebrewTitle],
+        wantedYear
+      );
+
+    console.log(
+      "TVNETIL RESULT:",
+      item.id,
+      item.name,
+      s
+    );
+
+    if (s > bestScore) {
+      bestScore = s;
       best = item;
     }
   }
 
-  console.log(
-    "TVNETIL BEST:",
-    best?.id,
-    best?.name,
-    bestScore
-  );
+  if (
+    !best ||
+    bestScore < 100
+  ) {
+    return null;
+  }
 
-  return best;
+  return {
+    item: best,
+    score: bestScore
+  };
 }
 
 /* =========================================================
@@ -522,7 +515,7 @@ async function searchFavez0ne(
   title
 ) {
   console.log(
-    "FAVEZ0NE SEARCH:",
+    "FAVEZONE SEARCH:",
     title
   );
 
@@ -533,70 +526,42 @@ async function searchFavez0ne(
       "submit.y": "0"
     }).toString();
 
-  const html =
-    await getText(
-      FAVE,
-      {
-        method: "POST",
+  return getText(
+    FAVE,
+    {
+      method: "POST",
 
-        headers: {
-          "Content-Type":
-            "application/x-www-form-urlencoded; charset=windows-1255",
+      headers: {
+        "Content-Type":
+          "application/x-www-form-urlencoded; charset=windows-1255",
 
-          "Referer":
-            "https://www.favez0ne.net/",
+        Referer:
+          "https://www.favez0ne.net/",
 
-          "Origin":
-            "https://www.favez0ne.net",
+        Origin:
+          "https://www.favez0ne.net",
 
-          "Accept":
-            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        },
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      },
 
-        body
-      }
-    );
-
-  console.log(
-    "FAVEZ0NE RESPONSE LENGTH:",
-    html.length
+      body
+    }
   );
-
-  return html;
 }
 
 /* =========================================================
    HTML DECODE
 ========================================================= */
 
-function decodeHtml(
-  value
-) {
+function decodeHtml(value) {
   return String(value || "")
-    .replace(
-      /&amp;/gi,
-      "&"
-    )
-    .replace(
-      /&quot;/gi,
-      '"'
-    )
-    .replace(
-      /&#39;/gi,
-      "'"
-    )
-    .replace(
-      /&apos;/gi,
-      "'"
-    )
-    .replace(
-      /&lt;/gi,
-      "<"
-    )
-    .replace(
-      /&gt;/gi,
-      ">"
-    )
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
     .replace(
       /&#(\d+);/g,
       (_, n) =>
@@ -622,10 +587,6 @@ function extractFavezLinks(
 ) {
   const results = [];
 
-  /*
-   href links
-  */
-
   const hrefRegex =
     /href\s*=\s*["']([^"']+)["']/gi;
 
@@ -633,67 +594,38 @@ function extractFavezLinks(
 
   while (
     (match =
-      hrefRegex.exec(html)) !==
-    null
+      hrefRegex.exec(html)) !== null
   ) {
-    let url =
-      decodeHtml(
-        match[1]
-      )
-        .replace(
-          /[\r\n\t]/g,
-          ""
-        )
+    const url =
+      decodeHtml(match[1])
+        .replace(/[\r\n\t]/g, "")
         .trim();
 
     if (
-      /^https?:\/\//i.test(
-        url
-      )
+      /^https?:\/\//i.test(url)
     ) {
       results.push(url);
     }
   }
-
-  /*
-   Direct URLs
-  */
 
   const directRegex =
     /https?:\/\/[^\s"'<>\\]+/gi;
 
   while (
     (match =
-      directRegex.exec(html)) !==
-    null
+      directRegex.exec(html)) !== null
   ) {
-    let url =
-      decodeHtml(
-        match[0]
-      )
-        .replace(
-          /[\r\n\t]/g,
-          ""
-        )
-        .replace(
-          /[),.;]+$/,
-          ""
-        )
+    const url =
+      decodeHtml(match[0])
+        .replace(/[\r\n\t]/g, "")
+        .replace(/[),.;]+$/, "")
         .trim();
 
     results.push(url);
   }
 
   const unique =
-    [
-      ...new Set(
-        results
-      )
-    ];
-
-  /*
-   Allowed hosts
-  */
+    [...new Set(results)];
 
   const allowed = [
     "pixeldrain.com",
@@ -720,6 +652,7 @@ function extractFavezLinks(
               "." + domain
             )
         );
+
       } catch {
         return false;
       }
@@ -731,9 +664,7 @@ function extractFavezLinks(
    HOST
 ========================================================= */
 
-function hostName(
-  url
-) {
+function hostName(url) {
   try {
     const host =
       new URL(url)
@@ -741,54 +672,43 @@ function hostName(
         .toLowerCase();
 
     if (
-      host.includes(
-        "pixeldrain"
-      )
+      host.includes("pixeldrain")
     ) {
       return "Pixeldrain";
     }
 
     if (
-      host.includes(
-        "gofile"
-      )
+      host.includes("gofile")
     ) {
       return "Gofile";
     }
 
     if (
-      host.includes(
-        "mega.nz"
-      )
+      host.includes("mega.nz")
     ) {
       return "Mega";
     }
 
     if (
-      host.includes(
-        "1fichier"
-      )
+      host.includes("1fichier")
     ) {
       return "1fichier";
     }
 
     if (
-      host.includes(
-        "send.now"
-      )
+      host.includes("send.now")
     ) {
       return "Send.now";
     }
 
     if (
-      host.includes(
-        "usersdrive"
-      )
+      host.includes("usersdrive")
     ) {
       return "UsersDrive";
     }
 
     return host;
+
   } catch {
     return "Favez0ne";
   }
@@ -802,29 +722,54 @@ function cleanStreams(
   urls
 ) {
   return urls.map(
-    url => {
-      const host =
-        hostName(url);
+    url => ({
+      name: "TVNetil",
 
-      return {
-        name:
-          "TVNetil",
+      title:
+        `${hostName(url)} | TVNetil`,
 
-        title:
-          `${host} | TVNetil`,
+      url,
 
-        url,
-
-        behaviorHints: {
-          notWebReady: true
-        }
-      };
-    }
+      behaviorHints: {
+        notWebReady: true
+      }
+    })
   );
 }
 
 /* =========================================================
-   STREAM ENDPOINT
+   BUILD FAVE TITLE
+========================================================= */
+
+function buildFaveTitle(
+  tvTitle,
+  tvYear
+) {
+  let title =
+    String(
+      tvTitle || ""
+    ).trim();
+
+  /*
+    TVNetil כבר נותן לעיתים:
+    בלאגן ביער (2025)
+
+    לכן לא מוסיפים שנה פעם נוספת.
+  */
+
+  if (
+    tvYear &&
+    !extractYear(title)
+  ) {
+    title =
+      `${title} (${tvYear})`;
+  }
+
+  return title;
+}
+
+/* =========================================================
+   MAIN STREAM
 ========================================================= */
 
 app.get(
@@ -840,16 +785,18 @@ app.get(
     } = req.params;
 
     console.log(
+      "================================"
+    );
+
+    console.log(
       "STREAM REQUEST:",
       type,
       id
     );
 
     if (
-      ![
-        "movie",
-        "series"
-      ].includes(type) ||
+      !["movie", "series"]
+        .includes(type) ||
       !/^tt\d+$/.test(id)
     ) {
       return res.json({
@@ -859,19 +806,20 @@ app.get(
 
     try {
 
-      /*
-       1. CINEMETA
-      */
+      /* ---------------------------------
+         1. CINEMETA
+      --------------------------------- */
 
       const cinemeta =
-        await getJson(
-          `${CM}/${type}/${id}.json`
+        await getCinemeta(
+          type,
+          id
         );
 
       const meta =
         cinemeta?.meta;
 
-      if (!meta) {
+      if (!meta?.name) {
         return res.json({
           streams: []
         });
@@ -885,53 +833,89 @@ app.get(
         );
 
       console.log(
-        "CINEMETA:",
-        meta.name,
+        "CINEMETA NAME:",
+        meta.name
+      );
+
+      console.log(
+        "CINEMETA YEAR:",
         wantedYear
       );
 
-      /*
-       2. TMDB -> HEBREW
-      */
-
-      const hebrew =
-        await getHebrewTitle(
-          id,
-          type,
-          meta
-        );
-
       console.log(
-        "HEBREW TITLE:",
-        hebrew.title
+        "CINEMETA TMDB:",
+        meta.moviedb_id
       );
 
-      if (!hebrew.title) {
+      /* ---------------------------------
+         2. GET TMDB ID
+      --------------------------------- */
 
-        console.log(
-          "NO HEBREW TMDB TITLE"
-        );
+      let tmdbId =
+        meta.moviedb_id ||
+        null;
 
-        return res.json({
-          streams: []
-        });
+      if (!tmdbId) {
+        tmdbId =
+          await findTMDBByIMDb(
+            type,
+            id
+          );
+      }
+
+      console.log(
+        "TMDB ID:",
+        tmdbId
+      );
+
+      /* ---------------------------------
+         3. GET HEBREW TITLE
+      --------------------------------- */
+
+      let hebrewTitle =
+        null;
+
+      if (tmdbId) {
+        hebrewTitle =
+          await getTMDBHebrewTitle(
+            type,
+            tmdbId
+          );
       }
 
       /*
-       3. TVNETIL
+        אם TMDB לא החזיר שם עברי,
+        ננסה את השם מ-Cinemeta.
       */
 
-      const tvItem =
-        await findTVNetilHebrewItem(
+      if (!hebrewTitle) {
+        hebrewTitle =
+          meta.name;
+      }
+
+      console.log(
+        "HEBREW SEARCH TITLE:",
+        hebrewTitle
+      );
+
+      /* ---------------------------------
+         4. SEARCH TVNETIL
+      --------------------------------- */
+
+      const matched =
+        await findTVNetilByHebrew(
           type,
-          hebrew.title,
+          hebrewTitle,
           wantedYear
         );
 
-      if (!tvItem?.id) {
+      if (
+        !matched?.item
+      ) {
 
         console.log(
-          "NO TVNETIL HEBREW MATCH"
+          "NO TVNETIL MATCH FOR:",
+          hebrewTitle
         );
 
         return res.json({
@@ -939,22 +923,41 @@ app.get(
         });
       }
 
+      const item =
+        matched.item;
+
       const tvTitle =
-        tvItem.name ||
-        tvItem.title;
+        item.name ||
+        item.title;
 
       const tvYear =
-        getItemYear(
-          tvItem
+        getItemYear(item);
+
+      console.log(
+        "TVNETIL MATCH:",
+        item.id,
+        tvTitle,
+        matched.score
+      );
+
+      /* ---------------------------------
+         5. SEARCH FAVEZONE
+      --------------------------------- */
+
+      const faveTitle =
+        buildFaveTitle(
+          tvTitle,
+          tvYear
         );
 
-      /*
-       4. FAVEZONE
-      */
+      console.log(
+        "FAVEZONE TITLE:",
+        faveTitle
+      );
 
       let html =
         await searchFavez0ne(
-          tvTitle
+          faveTitle
         );
 
       let urls =
@@ -962,16 +965,13 @@ app.get(
           html
         );
 
-      let searchUsed =
-        tvTitle;
-
       /*
-       Fallback without year
+        Fallback:
+        בלי השנה.
       */
 
       if (
-        urls.length === 0 &&
-        tvYear
+        urls.length === 0
       ) {
 
         const withoutYear =
@@ -982,34 +982,39 @@ app.get(
             )
             .trim();
 
-        console.log(
-          "FAVE FALLBACK:",
-          withoutYear
-        );
+        if (
+          withoutYear !==
+          faveTitle
+        ) {
 
-        html =
-          await searchFavez0ne(
+          console.log(
+            "FAVEZONE FALLBACK:",
             withoutYear
           );
 
-        urls =
-          extractFavezLinks(
-            html
-          );
+          html =
+            await searchFavez0ne(
+              withoutYear
+            );
 
-        searchUsed =
-          withoutYear;
+          urls =
+            extractFavezLinks(
+              html
+            );
+        }
       }
 
-      const streams =
-        cleanStreams(
-          urls
-        );
-
       console.log(
-        "FAVE SEARCH:",
-        searchUsed
+        "FAVEZONE LINKS:",
+        urls
       );
+
+      /* ---------------------------------
+         6. RETURN STREAMS
+      --------------------------------- */
+
+      const streams =
+        cleanStreams(urls);
 
       console.log(
         "STREAM COUNT:",
@@ -1036,268 +1041,8 @@ app.get(
 );
 
 /* =========================================================
-   DEBUG
-========================================================= */
-
-app.get(
-  "/debug/:type/:id.json",
-  async (
-    req,
-    res
-  ) => {
-
-    const {
-      type,
-      id
-    } = req.params;
-
-    try {
-
-      if (
-        ![
-          "movie",
-          "series"
-        ].includes(type) ||
-        !/^tt\d+$/.test(id)
-      ) {
-        return res.status(400).json({
-          success: false,
-          error:
-            "Invalid type or IMDb ID"
-        });
-      }
-
-      /*
-       CINEMETA
-      */
-
-      const cinemeta =
-        await getJson(
-          `${CM}/${type}/${id}.json`
-        );
-
-      const meta =
-        cinemeta?.meta;
-
-      if (!meta) {
-        return res.json({
-          success: false,
-          step:
-            "cinemeta"
-        });
-      }
-
-      const wantedYear =
-        extractYear(
-          meta.releaseInfo ||
-          meta.releaseDate ||
-          meta.year
-        );
-
-      /*
-       TMDB
-      */
-
-      const hebrew =
-        await getHebrewTitle(
-          id,
-          type,
-          meta
-        );
-
-      if (!hebrew.title) {
-        return res.json({
-
-          success: false,
-
-          step:
-            "tmdb-hebrew",
-
-          cinemeta: {
-            id,
-            name:
-              meta.name,
-            year:
-              wantedYear
-          },
-
-          tmdb:
-            hebrew.tmdb || null,
-
-          message:
-            "TMDB did not return a Hebrew title"
-        });
-      }
-
-      /*
-       TVNETIL
-      */
-
-      const tvItem =
-        await findTVNetilHebrewItem(
-          type,
-          hebrew.title,
-          wantedYear
-        );
-
-      if (!tvItem?.id) {
-        return res.json({
-
-          success: false,
-
-          step:
-            "tvnetil-hebrew-match",
-
-          cinemeta: {
-            id,
-            name:
-              meta.name,
-            year:
-              wantedYear
-          },
-
-          tmdb: {
-            id:
-              hebrew.tmdb?.id ||
-              null,
-
-            title:
-              hebrew.title
-          },
-
-          message:
-            "Hebrew title found, but no TVNetil match"
-        });
-      }
-
-      const tvTitle =
-        tvItem.name ||
-        tvItem.title;
-
-      const tvYear =
-        getItemYear(
-          tvItem
-        );
-
-      /*
-       FAVEZONE
-      */
-
-      let html =
-        await searchFavez0ne(
-          tvTitle
-        );
-
-      let urls =
-        extractFavezLinks(
-          html
-        );
-
-      let searchUsed =
-        tvTitle;
-
-      if (
-        urls.length === 0 &&
-        tvYear
-      ) {
-
-        const withoutYear =
-          String(tvTitle)
-            .replace(
-              /\s*\(\d{4}\)\s*$/,
-              ""
-            )
-            .trim();
-
-        html =
-          await searchFavez0ne(
-            withoutYear
-          );
-
-        urls =
-          extractFavezLinks(
-            html
-          );
-
-        searchUsed =
-          withoutYear;
-      }
-
-      const streams =
-        cleanStreams(
-          urls
-        );
-
-      return res.json({
-
-        success: true,
-
-        cinemeta: {
-          id,
-          name:
-            meta.name,
-          year:
-            wantedYear
-        },
-
-        tmdb: {
-          id:
-            hebrew.tmdb?.id ||
-            null,
-
-          title:
-            hebrew.title,
-
-          originalTitle:
-            hebrew.tmdb?.original_title ||
-            hebrew.tmdb?.original_name ||
-            null
-        },
-
-        tvnetil: {
-          id:
-            tvItem.id,
-
-          name:
-            tvTitle,
-
-          year:
-            tvYear
-        },
-
-        favezone: {
-
-          searchTitle:
-            searchUsed,
-
-          linkCount:
-            urls.length,
-
-          links:
-            urls
-        },
-
-        streams
-
-      });
-
-    } catch (error) {
-
-      return res.status(500).json({
-
-        success: false,
-
-        error:
-          error.stack ||
-          error.message
-
-      });
-    }
-  }
-);
-
-/* =========================================================
    SEARCH TVNETIL
+   TEST ENDPOINT
 ========================================================= */
 
 app.get(
@@ -1334,137 +1079,354 @@ app.get(
         );
 
       return res.json({
-
         success: true,
-
-        query:
-          q,
-
+        query: q,
         type,
-
-        count:
-          results.length,
+        count: results.length,
 
         results:
           results.map(
             item => ({
-              id:
-                item.id,
+              id: item.id,
 
               name:
                 item.name ||
                 item.title,
 
               year:
-                getItemYear(
-                  item
-                ),
+                getItemYear(item),
 
               type:
                 item.type
             })
           )
-
       });
 
     } catch (error) {
 
-      return res.status(500).json({
-
-        success: false,
-
-        error:
-          error.stack ||
-          error.message
-
-      });
+      return res.status(500)
+        .json({
+          success: false,
+          error:
+            error.stack ||
+            error.message
+        });
     }
   }
 );
 
 /* =========================================================
-   LIST TVNETIL
+   HEBREW DEBUG
 ========================================================= */
 
 app.get(
-  "/list-tvnetil",
+  "/debug/:type/:id.json",
   async (
     req,
     res
   ) => {
 
-    const type =
-      req.query.type === "series"
-        ? "series"
-        : "movie";
-
-    const skip =
-      Math.max(
-        0,
-        Number(
-          req.query.skip || 0
-        )
-      );
+    const {
+      type,
+      id
+    } = req.params;
 
     try {
 
-      const data =
-        await getCatalog(
+      if (
+        !["movie", "series"]
+          .includes(type) ||
+        !/^tt\d+$/.test(id)
+      ) {
+        return res.status(400)
+          .json({
+            success: false,
+            error:
+              "Invalid type or IMDb ID"
+          });
+      }
+
+      /* ---------------------------------
+         CINEMETA
+      --------------------------------- */
+
+      const cinemeta =
+        await getCinemeta(
           type,
-          skip
+          id
         );
 
-      const metas =
-        Array.isArray(
-          data.metas
-        )
-          ? data.metas
-          : [];
+      const meta =
+        cinemeta?.meta;
+
+      if (!meta?.name) {
+        return res.json({
+          success: false,
+          step: "cinemeta"
+        });
+      }
+
+      const wantedYear =
+        extractYear(
+          meta.releaseInfo ||
+          meta.releaseDate ||
+          meta.year
+        );
+
+      /* ---------------------------------
+         TMDB
+      --------------------------------- */
+
+      let tmdbId =
+        meta.moviedb_id ||
+        null;
+
+      if (!tmdbId) {
+        tmdbId =
+          await findTMDBByIMDb(
+            type,
+            id
+          );
+      }
+
+      const hebrewTitle =
+        tmdbId
+          ? await getTMDBHebrewTitle(
+              type,
+              tmdbId
+            )
+          : null;
+
+      /* ---------------------------------
+         TVNETIL
+      --------------------------------- */
+
+      const matched =
+        await findTVNetilByHebrew(
+          type,
+          hebrewTitle ||
+            meta.name,
+          wantedYear
+        );
+
+      if (
+        !matched?.item
+      ) {
+        return res.json({
+
+          success: false,
+
+          step:
+            "tvnetil-hebrew-search",
+
+          cinemeta: {
+            id,
+            name:
+              meta.name,
+            year:
+              wantedYear,
+            tmdb:
+              tmdbId
+          },
+
+          hebrewTitle:
+            hebrewTitle,
+
+          message:
+            "No TVNetil result for Hebrew title"
+        });
+      }
+
+      const item =
+        matched.item;
+
+      const tvTitle =
+        item.name ||
+        item.title;
+
+      const tvYear =
+        getItemYear(item);
+
+      const faveTitle =
+        buildFaveTitle(
+          tvTitle,
+          tvYear
+        );
+
+      /* ---------------------------------
+         FAVEZONE
+      --------------------------------- */
+
+      let html =
+        await searchFavez0ne(
+          faveTitle
+        );
+
+      let urls =
+        extractFavezLinks(
+          html
+        );
+
+      let searchUsed =
+        faveTitle;
+
+      if (
+        urls.length === 0
+      ) {
+
+        const withoutYear =
+          String(tvTitle)
+            .replace(
+              /\s*\(\d{4}\)\s*$/,
+              ""
+            )
+            .trim();
+
+        if (
+          withoutYear !==
+          faveTitle
+        ) {
+
+          html =
+            await searchFavez0ne(
+              withoutYear
+            );
+
+          urls =
+            extractFavezLinks(
+              html
+            );
+
+          searchUsed =
+            withoutYear;
+        }
+      }
 
       return res.json({
 
         success: true,
 
-        type,
+        cinemeta: {
+          id,
+          name:
+            meta.name,
+          year:
+            wantedYear,
+          tmdb:
+            tmdbId
+        },
 
-        skip,
+        hebrew: {
+          title:
+            hebrewTitle
+        },
 
-        count:
-          metas.length,
+        tvnetil: {
+          id:
+            item.id,
 
-        movies:
-          metas.map(
-            item => ({
-              id:
-                item.id,
+          name:
+            tvTitle,
 
-              name:
-                item.name ||
-                item.title,
+          year:
+            tvYear,
 
-              year:
-                getItemYear(
-                  item
-                ),
+          score:
+            matched.score
+        },
 
-              type:
-                item.type
-            })
-          )
+        favezone: {
+          searchTitle:
+            searchUsed,
 
+          linkCount:
+            urls.length,
+
+          links:
+            urls
+        },
+
+        streams:
+          cleanStreams(urls)
       });
 
     } catch (error) {
 
-      return res.status(500).json({
+      return res.status(500)
+        .json({
 
-        success: false,
+          success: false,
 
-        error:
-          error.stack ||
-          error.message
+          error:
+            error.stack ||
+            error.message
 
+        });
+    }
+  }
+);
+
+/* =========================================================
+   TMDB DEBUG
+========================================================= */
+
+app.get(
+  "/tmdb-debug/:type/:id",
+  async (
+    req,
+    res
+  ) => {
+
+    const {
+      type,
+      id
+    } = req.params;
+
+    try {
+
+      let tmdbId = id;
+
+      if (
+        /^tt\d+$/.test(id)
+      ) {
+        tmdbId =
+          await findTMDBByIMDb(
+            type,
+            id
+          );
+      }
+
+      if (!tmdbId) {
+        return res.json({
+          success: false,
+          message:
+            "TMDB ID not found"
+        });
+      }
+
+      const title =
+        await getTMDBHebrewTitle(
+          type,
+          tmdbId
+        );
+
+      return res.json({
+        success: true,
+        type,
+        tmdbId,
+        hebrewTitle:
+          title
       });
+
+    } catch (error) {
+
+      return res.status(500)
+        .json({
+          success: false,
+          error:
+            error.stack ||
+            error.message
+        });
     }
   }
 );
@@ -1516,15 +1478,16 @@ app.get(
 
     } catch (error) {
 
-      return res.status(500).json({
+      return res.status(500)
+        .json({
 
-        success: false,
+          success: false,
 
-        error:
-          error.stack ||
-          error.message
+          error:
+            error.stack ||
+            error.message
 
-      });
+        });
     }
   }
 );
@@ -1554,5 +1517,6 @@ app.listen(
     console.log(
       "TVNetil Direct Streams v1.6.0 started"
     );
+
   }
 );
