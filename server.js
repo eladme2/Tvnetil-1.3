@@ -6,7 +6,7 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "3.0.0",
+  version: "3.1.0",
   name: "TVNetil Direct Streams",
   description:
     "Nuvio Hebrew title -> TVNetil -> result title -> search engine -> external stream",
@@ -100,7 +100,7 @@ async function scraperSearch(query, num = 20) {
   }
 
   console.log(
-    "SCRAPER SEARCH:",
+    "SEARCH ENGINE QUERY:",
     query
   );
 
@@ -157,7 +157,7 @@ async function getMetadata(
 }
 
 /* =========================================================
-   HEBREW TITLE FROM NUVIO
+   HEBREW TITLE
 ========================================================= */
 
 function getHebrewTitle(
@@ -165,10 +165,8 @@ function getHebrewTitle(
   metadata
 ) {
   /*
-     FIRST PRIORITY:
-     title supplied in request.
-
-     We accept it only if it is Hebrew.
+     קודם כל title שמגיע בבקשה.
+     חייב להיות בעברית.
   */
 
   const requestTitle =
@@ -189,10 +187,8 @@ function getHebrewTitle(
   }
 
   /*
-     FALLBACK:
-     metadata title.
-
-     We do NOT translate English.
+     fallback למטאדאטה.
+     גם כאן מקבלים רק עברית.
   */
 
   const metadataTitle =
@@ -214,17 +210,12 @@ function getHebrewTitle(
 
 /* =========================================================
    STEP 1
-   NUVIO HEBREW TITLE -> TVNETIL
+   HEBREW TITLE -> SEARCH ENGINE
 ========================================================= */
 
 async function searchTVNetil(
   hebrewTitle
 ) {
-  /*
-     No Hebrew title:
-     absolutely no search.
-  */
-
   if (
     !hebrewTitle ||
     !hasHebrew(hebrewTitle)
@@ -233,11 +224,16 @@ async function searchTVNetil(
   }
 
   /*
-     The title is used EXACTLY as supplied.
+     חשוב:
+     חיפוש רגיל בלבד.
+
+     אין site:
+     אין -site:
+     אין קיצור דרך.
   */
 
   const query =
-    `site:tvnetil.net/review "${hebrewTitle}"`;
+    `"${hebrewTitle}"`;
 
   const data =
     await scraperSearch(
@@ -252,21 +248,35 @@ async function searchTVNetil(
       ? data.organic
       : [];
 
-  const results =
+  /*
+     עכשיו הסקרפר החזיר תוצאות.
+
+     רק כאן אנחנו בודקים מי מהן
+     באמת TVNetil.
+  */
+
+  const tvnetilResults =
     organic.filter(
-      item =>
-        item?.link &&
-        item.link.includes(
-          "tvnetil.net/review/"
-        )
+      item => {
+        const link =
+          String(
+            item?.link || ""
+          ).toLowerCase();
+
+        return (
+          link.includes(
+            "tvnetil.net/review/"
+          )
+        );
+      }
     );
 
-  return results;
+  return tvnetilResults;
 }
 
 /* =========================================================
    STEP 2
-   SELECT TVNETIL RESULT
+   CHOOSE TVNETIL RESULT
 ========================================================= */
 
 function chooseTVNetilResult(
@@ -300,7 +310,7 @@ function chooseTVNetilResult(
     let score = 0;
 
     /*
-       Exact complete match.
+       התאמה מלאה.
     */
 
     if (
@@ -310,7 +320,7 @@ function chooseTVNetilResult(
     }
 
     /*
-       Word matches.
+       התאמת מילים.
     */
 
     for (
@@ -324,8 +334,8 @@ function chooseTVNetilResult(
     }
 
     /*
-       Completely unrelated result:
-       reject it.
+       אם אין אפילו מילה אחת תואמת,
+       לא מדובר בסרט המבוקש.
     */
 
     if (
@@ -356,17 +366,17 @@ function chooseTVNetilResult(
 
 /* =========================================================
    STEP 3
-   GET TITLE FROM TVNETIL RESULT
+   TVNETIL RESULT TITLE
 ========================================================= */
 
-async function getTVNetilTitle(
+function getTVNetilTitle(
   selected
 ) {
   /*
-     We take the title of the TVNetil
-     search result.
+     הכותרת נלקחת ישירות מתוצאת
+     החיפוש של TVNetil.
 
-     No new movie-title search.
+     אין חיפוש נוסף כאן.
   */
 
   let title =
@@ -401,15 +411,13 @@ async function searchExternal(
   }
 
   /*
-     IMPORTANT:
+     כאן משתמשים בדיוק בכותרת שקיבלנו
+     מ-TVNetil.
 
-     The SECOND search uses ONLY the title
-     obtained from TVNetil.
+     חיפוש רגיל בלבד.
 
-     NO -site syntax because Serper Free
-     rejects it.
-
-     TVNetil will be removed by our code.
+     אין site:
+     אין -site:
   */
 
   const query =
@@ -429,9 +437,8 @@ async function searchExternal(
       : [];
 
   /*
-     Remove TVNetil AFTER receiving results.
-
-     This replaces -site:tvnetil.net.
+     רק אחרי קבלת התוצאות
+     מסננים TVNetil.
   */
 
   const externalResults =
@@ -451,11 +458,6 @@ async function searchExternal(
       }
     );
 
-  /*
-     If everything was TVNetil,
-     return no result.
-  */
-
   if (
     !externalResults.length
   ) {
@@ -466,9 +468,7 @@ async function searchExternal(
   }
 
   /*
-     Match the title.
-
-     We don't blindly take result #1.
+     בחירת התוצאה המתאימה ביותר.
   */
 
   const wanted =
@@ -498,7 +498,7 @@ async function searchExternal(
     let score = 0;
 
     /*
-       Exact title.
+       התאמה מלאה של הכותרת.
     */
 
     if (
@@ -508,7 +508,7 @@ async function searchExternal(
     }
 
     /*
-       Matching words.
+       התאמת מילים.
     */
 
     for (
@@ -522,7 +522,8 @@ async function searchExternal(
     }
 
     /*
-       Reject completely unrelated results.
+       תוצאה שאין לה שום קשר לכותרת
+       לא מתקבלת.
     */
 
     if (
@@ -569,15 +570,19 @@ async function resolveTVNetil(
   );
 
   console.log(
-    "STEP 1 - NUVIO HEBREW TITLE:",
+    "STEP 1 - HEBREW TITLE:",
     hebrewTitle
   );
 
   /*
-     STEP 1:
-     Nuvio Hebrew title
+     STEP 1
+     שם עברי
      ->
-     TVNetil
+     מנוע חיפוש
+     ->
+     תוצאות
+     ->
+     סינון TVNetil
   */
 
   const tvnetilResults =
@@ -606,8 +611,8 @@ async function resolveTVNetil(
   }
 
   /*
-     STEP 2:
-     Choose TVNetil result.
+     STEP 2
+     בחירת תוצאת TVNetil.
   */
 
   const selected =
@@ -635,12 +640,12 @@ async function resolveTVNetil(
   );
 
   /*
-     STEP 3:
-     Take title from TVNetil result.
+     STEP 3
+     לקיחת הכותרת של תוצאת TVNetil.
   */
 
   const tvnetilTitle =
-    await getTVNetilTitle(
+    getTVNetilTitle(
       selected
     );
 
@@ -649,7 +654,7 @@ async function resolveTVNetil(
       success: false,
 
       step:
-        "tvnetil-title",
+        "tvnetil-result-title",
 
       hebrewTitle,
 
@@ -661,13 +666,15 @@ async function resolveTVNetil(
   }
 
   console.log(
-    "STEP 3 - TVNETIL TITLE:",
+    "STEP 3 - TVNETIL RESULT TITLE:",
     tvnetilTitle
   );
 
   /*
-     STEP 4:
-     Put TVNetil title into search engine.
+     STEP 4
+     הכותרת של TVNetil
+     ->
+     מנוע החיפוש
   */
 
   const externalSearch =
@@ -705,8 +712,8 @@ async function resolveTVNetil(
   );
 
   /*
-     STEP 5:
-     Return external result as Stream.
+     STEP 5
+     Stream.
   */
 
   return {
@@ -757,7 +764,7 @@ async function resolveTVNetil(
 }
 
 /* =========================================================
-   TEST TITLE
+   TEST
 ========================================================= */
 
 app.get(
@@ -778,8 +785,7 @@ app.get(
     }
 
     /*
-       English:
-       stop immediately.
+       English is disabled.
     */
 
     if (
@@ -795,7 +801,7 @@ app.get(
           title,
 
         message:
-          "No Hebrew title. Search disabled.",
+          "No Hebrew title. English search is disabled.",
 
         streams: []
       });
@@ -827,6 +833,7 @@ app.get(
 
 /* =========================================================
    STREAM ENDPOINT
+   הנתיב נשאר בדיוק כמו שקבענו
 ========================================================= */
 
 app.get(
@@ -850,10 +857,7 @@ app.get(
 
     try {
       /*
-         Metadata is read only to obtain
-         the title associated with the IMDb ID.
-
-         We NEVER translate English.
+         Nuvio / Cinemeta metadata.
       */
 
       const metadata =
@@ -870,7 +874,7 @@ app.get(
         );
 
       /*
-         Nuvio title must be Hebrew.
+         כאן חייב להיות שם עברי.
       */
 
       const hebrewTitle =
@@ -880,8 +884,9 @@ app.get(
         );
 
       /*
-         NO HEBREW TITLE:
-         STOP.
+         אין עברית:
+         עוצרים.
+         לא מחפשים Creed באנגלית.
       */
 
       if (!hebrewTitle) {
@@ -906,11 +911,13 @@ app.get(
       }
 
       /*
-         EXACT ORDER:
+         הסדר הקבוע:
 
          Nuvio Hebrew title
          ->
-         TVNetil
+         search engine
+         ->
+         TVNetil result
          ->
          TVNetil result title
          ->
@@ -918,7 +925,7 @@ app.get(
          ->
          external URL
          ->
-         Stream
+         stream
       */
 
       const result =
@@ -985,7 +992,7 @@ app.get(
   "/",
   (_, res) => {
     res.send(
-      "TVNetil Direct Streams 3.0.0"
+      "TVNetil Direct Streams 3.1.0"
     );
   }
 );
@@ -998,7 +1005,7 @@ app.listen(
   process.env.PORT || 3000,
   () => {
     console.log(
-      "TVNetil Direct Streams 3.0.0 started"
+      "TVNetil Direct Streams 3.1.0 started"
     );
   }
 );
