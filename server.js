@@ -9,7 +9,7 @@ const MANIFEST = {
   version: "3.5.0",
   name: "TVNetil Direct Streams",
   description:
-    "Nuvio Hebrew title -> TVNetil -> result title -> search engine -> results",
+    "Nuvio Hebrew title -> TVNetil -> result title -> PixelDrain/GoFile",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -26,10 +26,8 @@ async function getJson(url, options = {}) {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-      Accept:
-        "application/json,text/plain,*/*",
-      "Accept-Language":
-        "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+      Accept: "application/json,text/plain,*/*",
+      "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
       ...(options.headers || {})
     }
   });
@@ -100,30 +98,20 @@ function hasHebrew(value) {
 
 async function serperSearch(query, num = 20) {
   if (!SERPER_API_KEY) {
-    throw new Error(
-      "SERPER_API_KEY is missing"
-    );
+    throw new Error("SERPER_API_KEY is missing");
   }
 
-  console.log(
-    "======================================"
-  );
-
-  console.log(
-    "SERPER QUERY:",
-    query
-  );
+  console.log("======================================");
+  console.log("SERPER QUERY:", query);
 
   const response = await fetch(
     "https://google.serper.dev/search",
     {
       method: "POST",
-
       headers: {
         "X-API-KEY": SERPER_API_KEY,
         "Content-Type": "application/json"
       },
-
       body: JSON.stringify({
         q: query,
         gl: "il",
@@ -133,8 +121,7 @@ async function serperSearch(query, num = 20) {
     }
   );
 
-  const data =
-    await response.json();
+  const data = await response.json();
 
   if (!response.ok) {
     throw new Error(
@@ -149,54 +136,36 @@ async function serperSearch(query, num = 20) {
    CINEMETA
 ========================================================= */
 
-async function getMetadata(
-  type,
-  imdbId
-) {
+async function getMetadata(type, imdbId) {
   const url =
     `https://v3-cinemeta.strem.io/meta/${type}/${encodeURIComponent(imdbId)}.json`;
 
-  const data =
-    await getJson(url);
+  const data = await getJson(url);
 
-  return (
-    data?.meta ||
-    data ||
-    null
-  );
+  return data?.meta || data || null;
 }
 
 /* =========================================================
    HEBREW TITLE
 ========================================================= */
 
-function getHebrewTitle(
-  req,
-  metadata
-) {
+function getHebrewTitle(req, metadata) {
   const requestTitle =
-    String(
-      req.query.title || ""
-    ).trim();
+    String(req.query.title || "").trim();
 
   if (requestTitle) {
-    if (
-      !hasHebrew(requestTitle)
-    ) {
+    if (!hasHebrew(requestTitle)) {
       return null;
     }
 
-    return cleanText(
-      requestTitle
-    );
+    return cleanText(requestTitle);
   }
 
-  const metadataTitle =
-    cleanText(
-      metadata?.name ||
-      metadata?.title ||
-      ""
-    );
+  const metadataTitle = cleanText(
+    metadata?.name ||
+    metadata?.title ||
+    ""
+  );
 
   if (
     metadataTitle &&
@@ -210,16 +179,10 @@ function getHebrewTitle(
 
 /* =========================================================
    STEP 1
-   HEBREW TITLE
-   ->
-   SEARCH ENGINE
-   ->
-   TVNETIL
+   HEBREW TITLE -> TVNETIL
 ========================================================= */
 
-async function searchTVNetil(
-  hebrewTitle
-) {
+async function searchTVNetil(hebrewTitle) {
   if (
     !hebrewTitle ||
     !hasHebrew(hebrewTitle)
@@ -235,70 +198,37 @@ async function searchTVNetil(
     `${hebrewTitle} TVNetil`;
 
   const data =
-    await serperSearch(
-      query,
-      20
-    );
+    await serperSearch(query, 20);
 
   const organic =
-    Array.isArray(
-      data?.organic
-    )
+    Array.isArray(data?.organic)
       ? data.organic
       : [];
 
   const allResults =
-    organic.map(
-      item => ({
-        title:
-          item?.title ||
-          null,
-
-        link:
-          item?.link ||
-          null,
-
-        snippet:
-          item?.snippet ||
-          null,
-
-        date:
-          item?.date ||
-          null,
-
-        position:
-          item?.position ||
-          null
-      })
-    );
+    organic.map(item => ({
+      title: item?.title || null,
+      link: item?.link || null,
+      snippet: item?.snippet || null,
+      date: item?.date || null,
+      position: item?.position || null
+    }));
 
   const tvnetilResults =
-    allResults.filter(
-      item => {
-        const link =
-          String(
-            item.link || ""
-          ).toLowerCase();
+    allResults.filter(item => {
+      const link =
+        String(item.link || "").toLowerCase();
 
-        return (
-          link.includes(
-            "tvnetil.net/review/"
-          )
-        );
-      }
-    );
+      return link.includes(
+        "tvnetil.net/review/"
+      );
+    });
 
   return {
     query,
-
-    resultCount:
-      tvnetilResults.length,
-
-    results:
-      tvnetilResults,
-
-    allSearchResults:
-      allResults
+    resultCount: tvnetilResults.length,
+    results: tvnetilResults,
+    allSearchResults: allResults
   };
 }
 
@@ -312,24 +242,17 @@ function chooseTVNetilResult(
   hebrewTitle
 ) {
   const wanted =
-    normalize(
-      hebrewTitle
-    );
+    normalize(hebrewTitle);
 
   const words =
     wanted
       .split(" ")
-      .filter(
-        word =>
-          word.length >= 2
-      );
+      .filter(word => word.length >= 2);
 
   let best = null;
   let bestScore = -1;
 
-  for (
-    const item of results
-  ) {
+  for (const item of results) {
     const text =
       normalize(
         `${item.title || ""} ${item.snippet || ""}`
@@ -337,37 +260,25 @@ function chooseTVNetilResult(
 
     let score = 0;
 
-    if (
-      text.includes(wanted)
-    ) {
+    if (text.includes(wanted)) {
       score += 300;
     }
 
-    for (
-      const word of words
-    ) {
-      if (
-        text.includes(word)
-      ) {
+    for (const word of words) {
+      if (text.includes(word)) {
         score += 20;
       }
     }
 
     if (
       words.length > 0 &&
-      !words.some(
-        word =>
-          text.includes(word)
-      )
+      !words.some(word => text.includes(word))
     ) {
       continue;
     }
 
-    if (
-      score > bestScore
-    ) {
-      bestScore =
-        score;
+    if (score > bestScore) {
+      bestScore = score;
 
       best = {
         ...item,
@@ -381,22 +292,16 @@ function chooseTVNetilResult(
 
 /* =========================================================
    STEP 3
-   TVNETIL RESULT
-   ->
-   RESULT TITLE
+   TVNETIL RESULT -> TITLE
 ========================================================= */
 
-function getTVNetilTitle(
-  selected
-) {
+function getTVNetilTitle(selected) {
   if (!selected) {
     return null;
   }
 
   let title =
-    cleanText(
-      selected.title || ""
-    );
+    cleanText(selected.title || "");
 
   title =
     title.replace(
@@ -404,24 +309,15 @@ function getTVNetilTitle(
       ""
     );
 
-  return (
-    title.trim() ||
-    null
-  );
+  return title.trim() || null;
 }
 
 /* =========================================================
    STEP 4
-   TVNETIL TITLE
-   ->
-   SEARCH ENGINE
-   ->
-   RESULTS
+   ORIGINAL TITLE SEARCH
 ========================================================= */
 
-async function searchExternal(
-  tvnetilTitle
-) {
+async function searchExternal(tvnetilTitle) {
   if (!tvnetilTitle) {
     return {
       query: null,
@@ -430,117 +326,280 @@ async function searchExternal(
     };
   }
 
-  const query =
-    tvnetilTitle;
+  const query = tvnetilTitle;
 
   const data =
-    await serperSearch(
-      query,
-      20
-    );
+    await serperSearch(query, 20);
 
   const organic =
-    Array.isArray(
-      data?.organic
-    )
+    Array.isArray(data?.organic)
       ? data.organic
       : [];
 
   const results =
-    organic.map(
-      item => ({
-        title:
-          item?.title ||
-          null,
-
-        link:
-          item?.link ||
-          null,
-
-        snippet:
-          item?.snippet ||
-          null,
-
-        date:
-          item?.date ||
-          null,
-
-        position:
-          item?.position ||
-          null
-      })
-    );
+    organic.map(item => ({
+      title: item?.title || null,
+      link: item?.link || null,
+      snippet: item?.snippet || null,
+      date: item?.date || null,
+      position: item?.position || null
+    }));
 
   return {
     query,
-
-    resultCount:
-      results.length,
-
+    resultCount: results.length,
     results
   };
 }
 
 /* =========================================================
    STEP 5
-   PRESENT SEARCH RESULTS
+   TARGETED PIXELDRAIN SEARCH
 ========================================================= */
 
-function buildSearchStreams(
-  results
-) {
-  if (
-    !Array.isArray(results)
-  ) {
-    return [];
+async function searchPixelDrain(tvnetilTitle) {
+  if (!tvnetilTitle) {
+    return {
+      query: null,
+      resultCount: 0,
+      results: []
+    };
   }
 
-  const seen =
-    new Set();
+  const queries = [
+    `${tvnetilTitle} PixelDrain`,
+    `"${tvnetilTitle}" "pixeldrain.com"`,
+    `${tvnetilTitle} pixeldrain.com/api/file`,
+    `${tvnetilTitle} pixeldrain`
+  ];
 
+  const collected = [];
+  const seen = new Set();
+
+  for (const query of queries) {
+    try {
+      const data =
+        await serperSearch(query, 20);
+
+      const organic =
+        Array.isArray(data?.organic)
+          ? data.organic
+          : [];
+
+      for (const item of organic) {
+        const result = {
+          title: item?.title || null,
+          link: item?.link || null,
+          snippet: item?.snippet || null,
+          date: item?.date || null,
+          position: item?.position || null
+        };
+
+        const link =
+          String(result.link || "").trim();
+
+        if (!link) {
+          continue;
+        }
+
+        if (
+          !link
+            .toLowerCase()
+            .includes("pixeldrain.com")
+        ) {
+          continue;
+        }
+
+        if (seen.has(link)) {
+          continue;
+        }
+
+        seen.add(link);
+        collected.push(result);
+      }
+    } catch (error) {
+      console.error(
+        "PIXELDRAIN SEARCH ERROR:",
+        error.message
+      );
+    }
+  }
+
+  return {
+    queries,
+    resultCount: collected.length,
+    results: collected
+  };
+}
+
+/* =========================================================
+   STEP 6
+   TARGETED GOFILE SEARCH
+========================================================= */
+
+async function searchGoFile(tvnetilTitle) {
+  if (!tvnetilTitle) {
+    return {
+      query: null,
+      resultCount: 0,
+      results: []
+    };
+  }
+
+  const queries = [
+    `${tvnetilTitle} GoFile`,
+    `"${tvnetilTitle}" "gofile.io"`,
+    `${tvnetilTitle} gofile.io`
+  ];
+
+  const collected = [];
+  const seen = new Set();
+
+  for (const query of queries) {
+    try {
+      const data =
+        await serperSearch(query, 20);
+
+      const organic =
+        Array.isArray(data?.organic)
+          ? data.organic
+          : [];
+
+      for (const item of organic) {
+        const result = {
+          title: item?.title || null,
+          link: item?.link || null,
+          snippet: item?.snippet || null,
+          date: item?.date || null,
+          position: item?.position || null
+        };
+
+        const link =
+          String(result.link || "").trim();
+
+        if (!link) {
+          continue;
+        }
+
+        if (
+          !link
+            .toLowerCase()
+            .includes("gofile.io")
+        ) {
+          continue;
+        }
+
+        if (seen.has(link)) {
+          continue;
+        }
+
+        seen.add(link);
+        collected.push(result);
+      }
+    } catch (error) {
+      console.error(
+        "GOFILE SEARCH ERROR:",
+        error.message
+      );
+    }
+  }
+
+  return {
+    queries,
+    resultCount: collected.length,
+    results: collected
+  };
+}
+
+/* =========================================================
+   STEP 7
+   EXTRACT STREAMS
+========================================================= */
+
+function extractStreams(
+  pixelDrainSearch,
+  goFileSearch
+) {
   const streams = [];
+  const seen = new Set();
 
-  for (
-    const item of results
-  ) {
-    const url =
-      String(
-        item?.link || ""
-      ).trim();
+  const addStream = (
+    item,
+    provider
+  ) => {
+    const link =
+      String(item?.link || "").trim();
 
-    if (!url) {
-      continue;
+    if (!link) {
+      return;
+    }
+
+    const lower =
+      link.toLowerCase();
+
+    let finalUrl = link;
+
+    /*
+     * PixelDrain יכול להופיע גם כקישור
+     * לדף וגם כקישור API.
+     *
+     * אם כבר קיבלנו API/file —
+     * נשאיר אותו כפי שהוא.
+     */
+
+    if (
+      provider === "PixelDrain" &&
+      lower.includes(
+        "pixeldrain.com/u/"
+      )
+    ) {
+      const id =
+        link.split("/").filter(Boolean).pop();
+
+      if (id) {
+        finalUrl =
+          `https://pixeldrain.com/api/file/${id}`;
+      }
     }
 
     if (
-      !/^https?:\/\//i.test(url)
+      seen.has(finalUrl)
     ) {
-      continue;
+      return;
     }
 
-    if (
-      seen.has(url)
-    ) {
-      continue;
-    }
-
-    seen.add(url);
+    seen.add(finalUrl);
 
     streams.push({
-      name:
-        "TVNetil Search",
-
+      name: provider,
       title:
         cleanText(
           item?.title ||
-          "Search result"
+          provider
         ),
-
-      url,
-
-      type:
-        "http"
+      url: finalUrl,
+      type: "http"
     });
+  };
+
+  for (
+    const item of
+    pixelDrainSearch?.results || []
+  ) {
+    addStream(
+      item,
+      "PixelDrain"
+    );
+  }
+
+  for (
+    const item of
+    goFileSearch?.results || []
+  ) {
+    addStream(
+      item,
+      "GoFile"
+    );
   }
 
   return streams;
@@ -553,51 +612,34 @@ function buildSearchStreams(
 async function resolveTVNetil(
   hebrewTitle
 ) {
-  console.log(
-    "======================================"
-  );
+  console.log("======================================");
+  console.log("FLOW START");
+  console.log("HEBREW TITLE:", hebrewTitle);
 
-  console.log(
-    "FLOW START"
-  );
-
-  console.log(
-    "HEBREW TITLE:",
-    hebrewTitle
-  );
-
-  /* STEP 1 */
+  /* -------------------------------------------------------
+     1. Hebrew -> TVNetil
+  ------------------------------------------------------- */
 
   const firstSearch =
     await searchTVNetil(
       hebrewTitle
     );
 
-  console.log(
-    "FIRST SEARCH RESULTS:",
-    firstSearch.resultCount
-  );
-
   if (
     !firstSearch.results.length
   ) {
     return {
       success: false,
-
-      step:
-        "tvnetil-search",
-
+      step: "tvnetil-search",
       hebrewTitle,
-
       firstSearch,
-
-      searchResults: [],
-
       streams: []
     };
   }
 
-  /* STEP 2 */
+  /* -------------------------------------------------------
+     2. Choose TVNetil
+  ------------------------------------------------------- */
 
   const selected =
     chooseTVNetilResult(
@@ -608,89 +650,98 @@ async function resolveTVNetil(
   if (!selected) {
     return {
       success: false,
-
-      step:
-        "tvnetil-selection",
-
+      step: "tvnetil-selection",
       hebrewTitle,
-
       firstSearch,
-
-      searchResults: [],
-
       streams: []
     };
   }
 
-  console.log(
-    "TVNETIL RESULT:",
-    selected
-  );
-
-  /* STEP 3 */
+  /* -------------------------------------------------------
+     3. TVNetil title
+  ------------------------------------------------------- */
 
   const tvnetilTitle =
     getTVNetilTitle(
       selected
     );
 
+  if (!tvnetilTitle) {
+    return {
+      success: false,
+      step: "tvnetil-result-title",
+      hebrewTitle,
+      firstSearch,
+      tvnetilResult: selected,
+      streams: []
+    };
+  }
+
   console.log(
     "TVNETIL TITLE:",
     tvnetilTitle
   );
 
-  if (!tvnetilTitle) {
-    return {
-      success: false,
-
-      step:
-        "tvnetil-result-title",
-
-      hebrewTitle,
-
-      firstSearch,
-
-      tvnetilResult:
-        selected,
-
-      searchResults: [],
-
-      streams: []
-    };
-  }
-
-  /* STEP 4 */
+  /* -------------------------------------------------------
+     4. רגיל - נשמר לצורך בדיקה
+  ------------------------------------------------------- */
 
   const secondSearch =
     await searchExternal(
       tvnetilTitle
     );
 
-  console.log(
-    "SECOND SEARCH RESULTS:",
-    secondSearch.resultCount
-  );
+  /* -------------------------------------------------------
+     5. PixelDrain
+  ------------------------------------------------------- */
 
-  /* STEP 5 */
+  const pixelDrainSearch =
+    await searchPixelDrain(
+      tvnetilTitle
+    );
+
+  /* -------------------------------------------------------
+     6. GoFile
+  ------------------------------------------------------- */
+
+  const goFileSearch =
+    await searchGoFile(
+      tvnetilTitle
+    );
+
+  /* -------------------------------------------------------
+     7. Streams בלבד
+  ------------------------------------------------------- */
 
   const streams =
-    buildSearchStreams(
-      secondSearch.results
+    extractStreams(
+      pixelDrainSearch,
+      goFileSearch
     );
 
   console.log(
-    "PRESENTED RESULTS:",
+    "PIXELDRAIN:",
+    pixelDrainSearch.resultCount
+  );
+
+  console.log(
+    "GOFILE:",
+    goFileSearch.resultCount
+  );
+
+  console.log(
+    "STREAMS:",
     streams.length
   );
 
   return {
     success:
-      secondSearch.results.length > 0,
+      streams.length > 0,
 
     step:
-      secondSearch.results.length > 0
-        ? "results"
-        : "external-search",
+      streams.length > 0
+        ? "streams"
+        : "results",
 
     hebrewTitle,
 
@@ -703,17 +754,9 @@ async function resolveTVNetil(
 
     secondSearch,
 
-    /*
-     * התוצאות המקוריות
-     * של החיפוש השני.
-     */
+    pixelDrainSearch,
 
-    searchResults:
-      secondSearch.results,
-
-    /*
-     * תצוגה בפורמט Stream.
-     */
+    goFileSearch,
 
     streams
   };
@@ -734,36 +777,25 @@ app.get(
     if (!title) {
       return res.json({
         success: false,
-
         message:
           "Use ?q=שם הסרט בעברית"
       });
     }
 
-    if (
-      !hasHebrew(title)
-    ) {
+    if (!hasHebrew(title)) {
       return res.json({
         success: false,
-
-        step:
-          "hebrew-title",
-
-        inputTitle:
-          title,
-
+        step: "hebrew-title",
+        inputTitle: title,
         message:
           "No Hebrew title. English search is disabled.",
-
         streams: []
       });
     }
 
     try {
       return res.json(
-        await resolveTVNetil(
-          title
-        )
+        await resolveTVNetil(title)
       );
     } catch (error) {
       console.error(
@@ -773,10 +805,7 @@ app.get(
 
       return res.status(500).json({
         success: false,
-
-        error:
-          error.message,
-
+        error: error.message,
         streams: []
       });
     }
@@ -829,18 +858,11 @@ app.get(
       if (!hebrewTitle) {
         return res.json({
           streams: [],
-
           tvnetil: {
             success: false,
-
-            imdbId:
-              id,
-
+            imdbId: id,
             metadataTitle,
-
-            step:
-              "hebrew-title",
-
+            step: "hebrew-title",
             message:
               "No Hebrew title available. English search is disabled."
           }
@@ -854,15 +876,11 @@ app.get(
 
       return res.json({
         streams:
-          result.streams ||
-          [],
+          result.streams || [],
 
         tvnetil: {
           ...result,
-
-          imdbId:
-            id,
-
+          imdbId: id,
           metadataTitle
         }
       });
@@ -875,18 +893,11 @@ app.get(
 
       return res.json({
         streams: [],
-
         tvnetil: {
           success: false,
-
-          imdbId:
-            id,
-
-          metadataTitle:
-            null,
-
-          error:
-            error.message
+          imdbId: id,
+          metadataTitle: null,
+          error: error.message
         }
       });
     }
@@ -900,9 +911,7 @@ app.get(
 app.get(
   "/manifest.json",
   (_, res) => {
-    res.json(
-      MANIFEST
-    );
+    res.json(MANIFEST);
   }
 );
 
