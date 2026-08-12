@@ -6,10 +6,10 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "3.3.0",
+  version: "3.4.0",
   name: "TVNetil Direct Streams",
   description:
-    "Nuvio Hebrew title -> TVNetil -> result title -> search engine -> results",
+    "Nuvio Hebrew title -> TVNetil -> result title -> search engine -> PixelDrain/GoFile streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -125,21 +125,9 @@ async function serperSearch(query, num = 20) {
       },
 
       body: JSON.stringify({
-        /*
-         * בכוונה אין:
-         * site:
-         * -site:
-         * מרכאות
-         *
-         * כדי להיות תואם ל-Serper Free.
-         */
-
         q: query,
-
         gl: "il",
-
         hl: "he",
-
         num
       })
     }
@@ -186,21 +174,12 @@ function getHebrewTitle(
   req,
   metadata
 ) {
-  /*
-   * קודם כל title שמגיע מ-Nuvio.
-   */
-
   const requestTitle =
     String(
       req.query.title || ""
     ).trim();
 
   if (requestTitle) {
-    /*
-     * אם Nuvio שלח שם באנגלית,
-     * לא מחפשים בכלל.
-     */
-
     if (
       !hasHebrew(requestTitle)
     ) {
@@ -211,12 +190,6 @@ function getHebrewTitle(
       requestTitle
     );
   }
-
-  /*
-   * fallback למטאדאטה.
-   *
-   * גם כאן עברית בלבד.
-   */
 
   const metadataTitle =
     cleanText(
@@ -237,7 +210,7 @@ function getHebrewTitle(
 
 /* =========================================================
    STEP 1
-   NUVIO HEBREW TITLE
+   HEBREW TITLE
    ->
    SEARCH ENGINE
    ->
@@ -253,22 +226,10 @@ async function searchTVNetil(
   ) {
     return {
       query: null,
-
       resultCount: 0,
-
       results: []
     };
   }
-
-  /*
-   * חשוב:
-   *
-   * לא משתמשים ב-site:
-   * לא משתמשים במרכאות.
-   *
-   * מוסיפים TVNetil למונח החיפוש
-   * כדי לכוון את מנוע החיפוש לאתר.
-   */
 
   const query =
     `${hebrewTitle} TVNetil`;
@@ -285,11 +246,6 @@ async function searchTVNetil(
     )
       ? data.organic
       : [];
-
-  /*
-   * שומרים את כל תוצאות החיפוש
-   * לצורך בדיקה.
-   */
 
   const allResults =
     organic.map(
@@ -315,11 +271,6 @@ async function searchTVNetil(
           null
       })
     );
-
-  /*
-   * עכשיו, ורק עכשיו,
-   * מסננים את TVNetil בקוד.
-   */
 
   const tvnetilResults =
     allResults.filter(
@@ -374,7 +325,6 @@ function chooseTVNetilResult(
       );
 
   let best = null;
-
   let bestScore = -1;
 
   for (
@@ -387,19 +337,11 @@ function chooseTVNetilResult(
 
     let score = 0;
 
-    /*
-     * התאמה מלאה.
-     */
-
     if (
       text.includes(wanted)
     ) {
       score += 300;
     }
-
-    /*
-     * התאמת מילים.
-     */
 
     for (
       const word of words
@@ -410,11 +352,6 @@ function chooseTVNetilResult(
         score += 20;
       }
     }
-
-    /*
-     * אם אין אף מילה תואמת,
-     * לא בוחרים את התוצאה.
-     */
 
     if (
       words.length > 0 &&
@@ -429,12 +366,10 @@ function chooseTVNetilResult(
     if (
       score > bestScore
     ) {
-      bestScore =
-        score;
+      bestScore = score;
 
       best = {
         ...item,
-
         score
       };
     }
@@ -457,20 +392,10 @@ function getTVNetilTitle(
     return null;
   }
 
-  /*
-   * הכותרת נלקחת מתוצאת החיפוש
-   * של TVNetil.
-   */
-
   let title =
     cleanText(
       selected.title || ""
     );
-
-  /*
-   * מסירים את שם האתר אם הופיע
-   * בכותרת.
-   */
 
   title =
     title.replace(
@@ -481,10 +406,7 @@ function getTVNetilTitle(
   title =
     title.trim();
 
-  return (
-    title ||
-    null
-  );
+  return title || null;
 }
 
 /* =========================================================
@@ -502,22 +424,15 @@ async function searchExternal(
   if (!tvnetilTitle) {
     return {
       query: null,
-
       resultCount: 0,
-
       results: []
     };
   }
 
   /*
-   * כאן מתחיל החיפוש השני.
-   *
-   * אנחנו שולחים למנוע החיפוש
-   * את הכותרת שקיבלנו מתוצאת TVNetil.
-   *
-   * אין site:
-   * אין -site:
-   * אין מרכאות.
+   * חשוב:
+   * החיפוש השני משתמש בדיוק בכותרת
+   * שקיבלנו מתוצאת TVNetil.
    */
 
   const query =
@@ -535,11 +450,6 @@ async function searchExternal(
     )
       ? data.organic
       : [];
-
-  /*
-   * מוציאים תוצאות TVNetil
-   * מהחיפוש השני.
-   */
 
   const externalResults =
     organic
@@ -591,6 +501,109 @@ async function searchExternal(
     results:
       externalResults
   };
+}
+
+/* =========================================================
+   STEP 5
+   FIND PIXELDRAIN / GOFILE
+========================================================= */
+
+function findStreamResults(
+  results
+) {
+  if (
+    !Array.isArray(results)
+  ) {
+    return [];
+  }
+
+  const streams = [];
+
+  const seen = new Set();
+
+  for (
+    const item of results
+  ) {
+    const link =
+      String(
+        item?.link || ""
+      ).trim();
+
+    if (!link) {
+      continue;
+    }
+
+    const lower =
+      link.toLowerCase();
+
+    let provider = null;
+
+    /*
+     * PixelDrain
+     */
+
+    if (
+      lower.includes(
+        "pixeldrain.com"
+      )
+    ) {
+      provider =
+        "PixelDrain";
+    }
+
+    /*
+     * GoFile
+     */
+
+    else if (
+      lower.includes(
+        "gofile.io"
+      )
+    ) {
+      provider =
+        "GoFile";
+    }
+
+    /*
+     * לא PixelDrain ולא GoFile
+     * -> לא Stream.
+     */
+
+    if (!provider) {
+      continue;
+    }
+
+    /*
+     * מניעת כפילויות.
+     */
+
+    if (
+      seen.has(link)
+    ) {
+      continue;
+    }
+
+    seen.add(link);
+
+    streams.push({
+      name:
+        provider,
+
+      title:
+        cleanText(
+          item?.title ||
+          provider
+        ),
+
+      url:
+        link,
+
+      type:
+        "http"
+    });
+  }
+
+  return streams;
 }
 
 /* =========================================================
@@ -732,22 +745,36 @@ async function resolveTVNetil(
     secondSearch.resultCount
   );
 
+  /* -------------------------------------------------------
+     STEP 5
+     תוצאות
+     ->
+     PixelDrain / GoFile
+  ------------------------------------------------------- */
+
+  const streams =
+    findStreamResults(
+      secondSearch.results
+    );
+
+  console.log(
+    "STREAM RESULTS:",
+    streams.length
+  );
+
   /*
-   * בשלב הזה אנחנו בכוונה
-   * מחזירים את כל התוצאות.
-   *
-   * לא בוחרים עדיין Stream באופן
-   * עיוור.
+   * מחזירים גם את תוצאות החיפוש
+   * כדי שנוכל לראות בדיוק מה נמצא.
    */
 
   return {
     success:
-      secondSearch.results.length > 0,
+      streams.length > 0,
 
     step:
-      secondSearch.results.length > 0
-        ? "results"
-        : "external-search",
+      streams.length > 0
+        ? "streams"
+        : "results",
 
     hebrewTitle,
 
@@ -760,12 +787,10 @@ async function resolveTVNetil(
 
     secondSearch,
 
-    /*
-     * כרגע מציגים את התוצאות
-     * ולא מחליטים לבד על קישור.
-     */
+    streamResults:
+      streams,
 
-    streams: []
+    streams
   };
 }
 
@@ -862,7 +887,7 @@ app.get(
 
     try {
       /*
-       * קודם כל metadata.
+       * METADATA
        */
 
       const metadata =
@@ -879,7 +904,7 @@ app.get(
         );
 
       /*
-       * אחר כך שם עברי בלבד.
+       * HEBREW TITLE ONLY
        */
 
       const hebrewTitle =
@@ -889,10 +914,8 @@ app.get(
         );
 
       /*
-       * אם אין עברית:
-       * עוצרים מיד.
-       *
-       * אין חיפוש באנגלית.
+       * אין שם עברי =
+       * אין חיפוש.
        */
 
       if (!hebrewTitle) {
@@ -917,14 +940,16 @@ app.get(
       }
 
       /*
-       * הסדר:
-
+       * EXACT FLOW:
+       *
        * 1. Hebrew title
        * 2. Search engine
-       * 3. TVNetil result
+       * 3. TVNetil
        * 4. TVNetil result title
        * 5. Search engine
        * 6. Results
+       * 7. PixelDrain / GoFile
+       * 8. Streams
        */
 
       const result =
@@ -994,7 +1019,7 @@ app.get(
   "/",
   (_, res) => {
     res.send(
-      "TVNetil Direct Streams 3.3.0"
+      "TVNetil Direct Streams 3.4.0"
     );
   }
 );
@@ -1007,7 +1032,7 @@ app.listen(
   process.env.PORT || 3000,
   () => {
     console.log(
-      "TVNetil Direct Streams 3.3.0 started"
+      "TVNetil Direct Streams 3.4.0 started"
     );
   }
 );
