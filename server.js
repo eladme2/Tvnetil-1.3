@@ -6,10 +6,10 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "2.9.0",
+  version: "3.0.0",
   name: "TVNetil Direct Streams",
   description:
-    "Nuvio Hebrew title -> TVNetil -> result title -> external search -> stream",
+    "Nuvio Hebrew title -> TVNetil -> result title -> search engine -> external stream",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -89,10 +89,10 @@ function hasHebrew(value) {
 }
 
 /* =========================================================
-   SERPER
+   SERPER / SCRAPER
 ========================================================= */
 
-async function serperSearch(query, num = 10) {
+async function scraperSearch(query, num = 20) {
   if (!SERPER_API_KEY) {
     throw new Error(
       "SERPER_API_KEY is missing"
@@ -100,7 +100,7 @@ async function serperSearch(query, num = 10) {
   }
 
   console.log(
-    "SERPER SEARCH:",
+    "SCRAPER SEARCH:",
     query
   );
 
@@ -136,7 +136,7 @@ async function serperSearch(query, num = 10) {
 }
 
 /* =========================================================
-   CINEMETA
+   METADATA
 ========================================================= */
 
 async function getMetadata(
@@ -157,7 +157,7 @@ async function getMetadata(
 }
 
 /* =========================================================
-   HEBREW TITLE
+   HEBREW TITLE FROM NUVIO
 ========================================================= */
 
 function getHebrewTitle(
@@ -165,11 +165,10 @@ function getHebrewTitle(
   metadata
 ) {
   /*
-     If Nuvio/request supplies ?title,
-     use it exactly.
+     FIRST PRIORITY:
+     title supplied in request.
 
-     No translation.
-     No title generation.
+     We accept it only if it is Hebrew.
   */
 
   const requestTitle =
@@ -177,31 +176,23 @@ function getHebrewTitle(
       req.query.title || ""
     ).trim();
 
-  if (
-    requestTitle &&
-    hasHebrew(requestTitle)
-  ) {
+  if (requestTitle) {
+    if (
+      !hasHebrew(requestTitle)
+    ) {
+      return null;
+    }
+
     return cleanText(
       requestTitle
     );
   }
 
   /*
-     If an explicit title was supplied
-     but it is English, stop.
-  */
+     FALLBACK:
+     metadata title.
 
-  if (
-    requestTitle &&
-    !hasHebrew(requestTitle)
-  ) {
-    return null;
-  }
-
-  /*
-     Fallback metadata.
-
-     Only accept Hebrew.
+     We do NOT translate English.
   */
 
   const metadataTitle =
@@ -223,12 +214,17 @@ function getHebrewTitle(
 
 /* =========================================================
    STEP 1
-   HEBREW TITLE -> TVNETIL
+   NUVIO HEBREW TITLE -> TVNETIL
 ========================================================= */
 
 async function searchTVNetil(
   hebrewTitle
 ) {
+  /*
+     No Hebrew title:
+     absolutely no search.
+  */
+
   if (
     !hebrewTitle ||
     !hasHebrew(hebrewTitle)
@@ -237,75 +233,40 @@ async function searchTVNetil(
   }
 
   /*
-     First search.
-
-     EXACT Hebrew title.
+     The title is used EXACTLY as supplied.
   */
 
-  const queries = [
-    `site:tvnetil.net/review "${hebrewTitle}"`,
-    `site:tvnetil.net/review ${hebrewTitle}`
-  ];
+  const query =
+    `site:tvnetil.net/review "${hebrewTitle}"`;
 
-  const allResults = [];
+  const data =
+    await scraperSearch(
+      query,
+      20
+    );
 
-  for (
-    const query of queries
-  ) {
-    const data =
-      await serperSearch(
-        query,
-        10
-      );
+  const organic =
+    Array.isArray(
+      data.organic
+    )
+      ? data.organic
+      : [];
 
-    if (
-      Array.isArray(
-        data.organic
-      )
-    ) {
-      for (
-        const item of data.organic
-      ) {
-        if (!item?.link) {
-          continue;
-        }
+  const results =
+    organic.filter(
+      item =>
+        item?.link &&
+        item.link.includes(
+          "tvnetil.net/review/"
+        )
+    );
 
-        if (
-          !item.link.includes(
-            "tvnetil.net/review/"
-          )
-        ) {
-          continue;
-        }
-
-        allResults.push(
-          item
-        );
-      }
-    }
-  }
-
-  const unique = [];
-  const seen = new Set();
-
-  for (
-    const item of allResults
-  ) {
-    if (
-      seen.has(item.link)
-    ) {
-      continue;
-    }
-
-    seen.add(item.link);
-    unique.push(item);
-  }
-
-  return unique;
+  return results;
 }
 
 /* =========================================================
-   CHOOSE TVNETIL RESULT
+   STEP 2
+   SELECT TVNETIL RESULT
 ========================================================= */
 
 function chooseTVNetilResult(
@@ -338,11 +299,19 @@ function chooseTVNetilResult(
 
     let score = 0;
 
+    /*
+       Exact complete match.
+    */
+
     if (
       text.includes(wanted)
     ) {
-      score += 200;
+      score += 300;
     }
+
+    /*
+       Word matches.
+    */
 
     for (
       const word of words
@@ -350,12 +319,13 @@ function chooseTVNetilResult(
       if (
         text.includes(word)
       ) {
-        score += 15;
+        score += 20;
       }
     }
 
     /*
-       Reject completely unrelated TVNetil results.
+       Completely unrelated result:
+       reject it.
     */
 
     if (
@@ -385,14 +355,18 @@ function chooseTVNetilResult(
 }
 
 /* =========================================================
-   TVNETIL RESULT TITLE
+   STEP 3
+   GET TITLE FROM TVNETIL RESULT
 ========================================================= */
 
-async function getTVNetilResultTitle(
+async function getTVNetilTitle(
   selected
 ) {
   /*
-     Prefer the title returned by Serper.
+     We take the title of the TVNetil
+     search result.
+
+     No new movie-title search.
   */
 
   let title =
@@ -408,19 +382,15 @@ async function getTVNetilResultTitle(
       )
       .trim();
 
-  if (title) {
-    return title;
-  }
-
-  return null;
+  return title || null;
 }
 
 /* =========================================================
-   STEP 2
-   TVNETIL TITLE -> EXTERNAL SEARCH
+   STEP 4
+   TVNETIL TITLE -> SEARCH ENGINE
 ========================================================= */
 
-async function searchFinalEngine(
+async function searchExternal(
   tvnetilTitle
 ) {
   if (!tvnetilTitle) {
@@ -433,19 +403,20 @@ async function searchFinalEngine(
   /*
      IMPORTANT:
 
-     This is the SECOND search.
+     The SECOND search uses ONLY the title
+     obtained from TVNetil.
 
-     TVNetil itself is explicitly excluded.
+     NO -site syntax because Serper Free
+     rejects it.
 
-     We search using ONLY the title
-     obtained from the TVNetil result.
+     TVNetil will be removed by our code.
   */
 
   const query =
-    `"${tvnetilTitle}" -site:tvnetil.net`;
+    `"${tvnetilTitle}"`;
 
   const data =
-    await serperSearch(
+    await scraperSearch(
       query,
       20
     );
@@ -458,12 +429,12 @@ async function searchFinalEngine(
       : [];
 
   /*
-     Extra protection:
-     remove every TVNetil result even if
-     Serper ignores the exclusion.
+     Remove TVNetil AFTER receiving results.
+
+     This replaces -site:tvnetil.net.
   */
 
-  const results =
+  const externalResults =
     organic.filter(
       item => {
         const link =
@@ -480,7 +451,14 @@ async function searchFinalEngine(
       }
     );
 
-  if (!results.length) {
+  /*
+     If everything was TVNetil,
+     return no result.
+  */
+
+  if (
+    !externalResults.length
+  ) {
     return {
       selected: null,
       results: []
@@ -488,9 +466,9 @@ async function searchFinalEngine(
   }
 
   /*
-     Match the TVNetil title.
+     Match the title.
 
-     We don't simply take result #1.
+     We don't blindly take result #1.
   */
 
   const wanted =
@@ -510,7 +488,7 @@ async function searchFinalEngine(
   let bestScore = -1;
 
   for (
-    const item of results
+    const item of externalResults
   ) {
     const text =
       normalize(
@@ -520,7 +498,7 @@ async function searchFinalEngine(
     let score = 0;
 
     /*
-       Exact complete title.
+       Exact title.
     */
 
     if (
@@ -530,7 +508,7 @@ async function searchFinalEngine(
     }
 
     /*
-       Individual title words.
+       Matching words.
     */
 
     for (
@@ -544,8 +522,7 @@ async function searchFinalEngine(
     }
 
     /*
-       Do not accept a result with
-       zero matching words.
+       Reject completely unrelated results.
     */
 
     if (
@@ -575,7 +552,8 @@ async function searchFinalEngine(
     selected:
       best,
 
-    results
+    results:
+      externalResults
   };
 }
 
@@ -591,13 +569,15 @@ async function resolveTVNetil(
   );
 
   console.log(
-    "HEBREW TITLE:",
+    "STEP 1 - NUVIO HEBREW TITLE:",
     hebrewTitle
   );
 
   /*
-     STEP 1
-     Hebrew title -> TVNetil
+     STEP 1:
+     Nuvio Hebrew title
+     ->
+     TVNetil
   */
 
   const tvnetilResults =
@@ -606,7 +586,7 @@ async function resolveTVNetil(
     );
 
   console.log(
-    "TVNETIL RESULTS:",
+    "STEP 1 - TVNETIL RESULTS:",
     tvnetilResults.length
   );
 
@@ -626,8 +606,8 @@ async function resolveTVNetil(
   }
 
   /*
-     STEP 2
-     Choose TVNetil result
+     STEP 2:
+     Choose TVNetil result.
   */
 
   const selected =
@@ -645,25 +625,22 @@ async function resolveTVNetil(
 
       hebrewTitle,
 
-      results:
-        tvnetilResults,
-
       streams: []
     };
   }
 
   console.log(
-    "TVNETIL URL:",
+    "STEP 2 - TVNETIL URL:",
     selected.link
   );
 
   /*
-     STEP 3
-     Get title from TVNetil
+     STEP 3:
+     Take title from TVNetil result.
   */
 
   const tvnetilTitle =
-    await getTVNetilResultTitle(
+    await getTVNetilTitle(
       selected
     );
 
@@ -672,7 +649,7 @@ async function resolveTVNetil(
       success: false,
 
       step:
-        "tvnetil-result-title",
+        "tvnetil-title",
 
       hebrewTitle,
 
@@ -684,22 +661,22 @@ async function resolveTVNetil(
   }
 
   console.log(
-    "TVNETIL TITLE:",
+    "STEP 3 - TVNETIL TITLE:",
     tvnetilTitle
   );
 
   /*
-     STEP 4
-     TVNetil title -> external search
+     STEP 4:
+     Put TVNetil title into search engine.
   */
 
-  const finalSearch =
-    await searchFinalEngine(
+  const externalSearch =
+    await searchExternal(
       tvnetilTitle
     );
 
   const finalResult =
-    finalSearch.selected;
+    externalSearch.selected;
 
   if (!finalResult?.link) {
     return {
@@ -716,20 +693,20 @@ async function resolveTVNetil(
         selected.link,
 
       searchResults:
-        finalSearch.results,
+        externalSearch.results,
 
       streams: []
     };
   }
 
   console.log(
-    "EXTERNAL URL:",
+    "STEP 4 - EXTERNAL URL:",
     finalResult.link
   );
 
   /*
-     STEP 5
-     Return final external URL
+     STEP 5:
+     Return external result as Stream.
   */
 
   return {
@@ -780,7 +757,7 @@ async function resolveTVNetil(
 }
 
 /* =========================================================
-   TEST
+   TEST TITLE
 ========================================================= */
 
 app.get(
@@ -801,7 +778,8 @@ app.get(
     }
 
     /*
-       English is never searched.
+       English:
+       stop immediately.
     */
 
     if (
@@ -848,7 +826,7 @@ app.get(
 );
 
 /* =========================================================
-   STREAM
+   STREAM ENDPOINT
 ========================================================= */
 
 app.get(
@@ -872,9 +850,10 @@ app.get(
 
     try {
       /*
-         Get metadata only.
+         Metadata is read only to obtain
+         the title associated with the IMDb ID.
 
-         We NEVER translate an English title.
+         We NEVER translate English.
       */
 
       const metadata =
@@ -890,6 +869,10 @@ app.get(
           ""
         );
 
+      /*
+         Nuvio title must be Hebrew.
+      */
+
       const hebrewTitle =
         getHebrewTitle(
           req,
@@ -897,8 +880,8 @@ app.get(
         );
 
       /*
-         No Hebrew title =
-         no search whatsoever.
+         NO HEBREW TITLE:
+         STOP.
       */
 
       if (!hebrewTitle) {
@@ -923,19 +906,19 @@ app.get(
       }
 
       /*
-         EXACT FLOW:
+         EXACT ORDER:
 
-         Hebrew title
+         Nuvio Hebrew title
          ->
          TVNetil
          ->
          TVNetil result title
          ->
-         external search
+         search engine
          ->
          external URL
          ->
-         stream
+         Stream
       */
 
       const result =
@@ -1002,7 +985,7 @@ app.get(
   "/",
   (_, res) => {
     res.send(
-      "TVNetil Direct Streams 2.9.0"
+      "TVNetil Direct Streams 3.0.0"
     );
   }
 );
@@ -1015,7 +998,7 @@ app.listen(
   process.env.PORT || 3000,
   () => {
     console.log(
-      "TVNetil Direct Streams 2.9.0 started"
+      "TVNetil Direct Streams 3.0.0 started"
     );
   }
 );
