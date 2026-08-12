@@ -13,7 +13,7 @@ const MANIFEST = {
   description: "TVNetil Hebrew title -> FaveZone streams",
   resources: ["stream"],
   types: ["movie", "series"],
-  idPrefixes: ["tt", "tvnetil_"]
+  idPrefixes: ["tt"]
 };
 
 /* =========================================================
@@ -26,10 +26,8 @@ async function getText(url, options = {}) {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
-
       "Accept":
         "text/html,application/xhtml+xml,application/xml,application/json,*/*",
-
       ...(options.headers || {})
     }
   });
@@ -89,8 +87,7 @@ function decodeHtml(value) {
     )
     .replace(
       /&#x([0-9a-f]+);/gi,
-      (_, n) =>
-        String.fromCharCode(parseInt(n, 16))
+      (_, n) => String.fromCharCode(parseInt(n, 16))
     );
 }
 
@@ -127,55 +124,6 @@ async function getCatalog(type, skip = 0) {
 }
 
 /* =========================================================
-   FIND EXACT TVNETIL ID
-========================================================= */
-
-async function findCatalogItemById(type, id) {
-  for (
-    let skip = 0;
-    skip < 10000;
-    skip += 100
-  ) {
-    let data;
-
-    try {
-      data = await getCatalog(type, skip);
-    } catch (error) {
-      console.error(
-        "CATALOG ERROR:",
-        error.message
-      );
-
-      return null;
-    }
-
-    const metas =
-      Array.isArray(data?.metas)
-        ? data.metas
-        : [];
-
-    if (!metas.length) {
-      break;
-    }
-
-    const found =
-      metas.find(item =>
-        String(item?.id || "").trim() === id
-      );
-
-    if (found) {
-      return found;
-    }
-
-    if (metas.length < 100) {
-      break;
-    }
-  }
-
-  return null;
-}
-
-/* =========================================================
    TVNETIL CATALOG SEARCH
 ========================================================= */
 
@@ -200,17 +148,12 @@ async function searchTVNetilCatalog(
     let data;
 
     try {
-      data =
-        await getCatalog(
-          type,
-          skip
-        );
+      data = await getCatalog(type, skip);
     } catch (error) {
       console.error(
         "TVNETIL CATALOG ERROR:",
         error.message
       );
-
       break;
     }
 
@@ -224,13 +167,12 @@ async function searchTVNetilCatalog(
     }
 
     for (const item of metas) {
-      const name =
-        normalize(
-          item.name ||
-          item.title ||
-          item.originalName ||
-          item.originalTitle
-        );
+      const name = normalize(
+        item.name ||
+        item.title ||
+        item.originalName ||
+        item.originalTitle
+      );
 
       if (!name) {
         continue;
@@ -247,9 +189,7 @@ async function searchTVNetilCatalog(
       const wantedWords =
         wanted
           .split(" ")
-          .filter(
-            word => word.length >= 2
-          );
+          .filter(word => word.length >= 2);
 
       const matched =
         wantedWords.filter(
@@ -287,16 +227,14 @@ function buildTVNetilSearchUrl(query) {
 }
 
 async function searchTVNetilWebsite(query) {
-  const url =
-    buildTVNetilSearchUrl(query);
+  const url = buildTVNetilSearchUrl(query);
 
   console.log(
     "TVNETIL WEBSITE SEARCH:",
     url
   );
 
-  const html =
-    await getText(url);
+  const html = await getText(url);
 
   return {
     url,
@@ -305,7 +243,7 @@ async function searchTVNetilWebsite(query) {
 }
 
 /* =========================================================
-   EXTRACT TVNETIL REVIEW LINKS
+   REVIEW LINKS
 ========================================================= */
 
 function extractReviewLinks(html) {
@@ -319,13 +257,9 @@ function extractReviewLinks(html) {
   while (
     (match = regex.exec(html)) !== null
   ) {
-    const path =
-      match[1];
-
-    const url =
-      `${TVNETIL}${path}`;
-
-    results.push(url);
+    results.push(
+      `${TVNETIL}${match[1]}`
+    );
   }
 
   return [
@@ -334,7 +268,7 @@ function extractReviewLinks(html) {
 }
 
 /* =========================================================
-   EXTRACT TVNETIL TITLE
+   TVNETIL TITLE
 ========================================================= */
 
 function extractTVNetilTitle(html) {
@@ -367,37 +301,25 @@ function extractTVNetilTitle(html) {
     }
   }
 
-  match =
-    html.match(
-      /<h1[^>]*>([\s\S]*?)<\/h1>/i
-    );
+  for (const tag of ["h1", "h2"]) {
+    match =
+      html.match(
+        new RegExp(
+          `<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`,
+          "i"
+        )
+      );
 
-  if (match) {
-    const title =
-      cleanText(match[1]);
+    if (match) {
+      const title =
+        cleanText(match[1]);
 
-    if (
-      title &&
-      title.length >= 2
-    ) {
-      return title;
-    }
-  }
-
-  match =
-    html.match(
-      /<h2[^>]*>([\s\S]*?)<\/h2>/i
-    );
-
-  if (match) {
-    const title =
-      cleanText(match[1]);
-
-    if (
-      title &&
-      title.length >= 2
-    ) {
-      return title;
+      if (
+        title &&
+        title.length >= 2
+      ) {
+        return title;
+      }
     }
   }
 
@@ -417,12 +339,10 @@ async function getTVNetilReview(url) {
   const html =
     await getText(url);
 
-  const title =
-    extractTVNetilTitle(html);
-
   return {
     url,
-    title,
+    title:
+      extractTVNetilTitle(html),
     html
   };
 }
@@ -447,9 +367,7 @@ async function findTVNetilReview(
   );
 
   const search =
-    await searchTVNetilWebsite(
-      query
-    );
+    await searchTVNetilWebsite(query);
 
   const reviewLinks =
     extractReviewLinks(
@@ -472,11 +390,9 @@ async function findTVNetilReview(
         return {
           success: true,
           catalogResults,
-          searchUrl:
-            search.url,
+          searchUrl: search.url,
           reviewUrl,
-          title:
-            review.title
+          title: review.title
         };
       }
     } catch (error) {
@@ -490,8 +406,7 @@ async function findTVNetilReview(
   return {
     success: false,
     catalogResults,
-    searchUrl:
-      search.url,
+    searchUrl: search.url,
     reviewLinks,
     title: null
   };
@@ -514,31 +429,28 @@ async function searchFavez0ne(title) {
     title
   );
 
-  const html =
-    await getText(
-      FAVE,
-      {
-        method: "POST",
+  return await getText(
+    FAVE,
+    {
+      method: "POST",
 
-        headers: {
-          "Content-Type":
-            "application/x-www-form-urlencoded; charset=windows-1255",
+      headers: {
+        "Content-Type":
+          "application/x-www-form-urlencoded; charset=windows-1255",
 
-          "Referer":
-            "https://www.favez0ne.net/",
+        "Referer":
+          "https://www.favez0ne.net/",
 
-          "Origin":
-            "https://www.favez0ne.net",
+        "Origin":
+          "https://www.favez0ne.net",
 
-          "Accept":
-            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        },
+        "Accept":
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      },
 
-        body
-      }
-    );
-
-  return html;
+      body
+    }
+  );
 }
 
 /* =========================================================
@@ -577,23 +489,15 @@ function extractFavezLinks(html) {
   ) {
     let url =
       decodeHtml(match[0])
-        .replace(
-          /[\r\n\t]/g,
-          ""
-        )
-        .replace(
-          /[),.;]+$/,
-          ""
-        )
+        .replace(/[\r\n\t]/g, "")
+        .replace(/[),.;]+$/, "")
         .trim();
 
     results.push(url);
   }
 
   const unique =
-    [
-      ...new Set(results)
-    ];
+    [...new Set(results)];
 
   const allowed = [
     "pixeldrain.com",
@@ -625,27 +529,52 @@ function extractFavezLinks(html) {
   });
 }
 
-/* =========================================================
-   FAVE SEARCH
-========================================================= */
-
 async function searchFave(title) {
   const html =
-    await searchFavez0ne(
-      title
-    );
+    await searchFavez0ne(title);
 
   const links =
-    extractFavezLinks(
-      html
-    );
+    extractFavezLinks(html);
 
   return {
     title,
-    htmlLength:
-      html.length,
+    htmlLength: html.length,
     links
   };
+}
+
+/* =========================================================
+   CONVERT FAVE LINKS TO NUVIO STREAMS
+========================================================= */
+
+function buildStreams(
+  links,
+  title,
+  type,
+  id
+) {
+  return links.map(
+    (url, index) => ({
+      name:
+        `TVNetil • ${title}`,
+
+      title:
+        `צפייה ישירה • ${title}`,
+
+      url,
+
+      type:
+        "url",
+
+      behaviorHints: {
+        bingeGroup:
+          `tvnetil-${type}-${id}`,
+
+        notWebReady:
+          false
+      }
+    })
+  );
 }
 
 /* =========================================================
@@ -685,20 +614,13 @@ app.get(
           success: false,
           step:
             "tvnetil-review",
-          query:
-            q,
-          tvnetil:
-            tv
+          query: q,
+          tvnetil: tv
         });
       }
 
       const hebrewTitle =
         tv.title;
-
-      console.log(
-        "TVNETIL PAGE TITLE:",
-        hebrewTitle
-      );
 
       const fave =
         await searchFave(
@@ -710,8 +632,7 @@ app.get(
           fave.links.length > 0,
 
         input: {
-          query:
-            q,
+          query: q,
           type
         },
 
@@ -792,17 +713,14 @@ app.get(
 
       return res.json({
         success: true,
-        query:
-          q,
+        query: q,
         type,
-        count:
-          results.length,
+        count: results.length,
 
         results:
           results.map(
             item => ({
-              id:
-                item.id,
+              id: item.id,
 
               name:
                 item.name ||
@@ -849,9 +767,7 @@ app.get(
 
     try {
       const result =
-        await searchFave(
-          title
-        );
+        await searchFave(title);
 
       return res.json({
         success:
@@ -905,101 +821,145 @@ app.get(
       id
     );
 
+    if (!id) {
+      return res.json({
+        streams: []
+      });
+    }
+
+    /*
+       Nuvio שולח בדרך כלל IMDb ID:
+       tt1234567
+
+       כרגע אין לנו metadata ישיר מה-ID,
+       לכן ננסה למצוא את הכותרת דרך Cinemeta.
+    */
+
     try {
 
-      /*
-         כרגע אנחנו תומכים
-         ב־TVNetil IDs.
-      */
-
-      if (
-        !id.startsWith(
-          "tvnetil_"
-        )
-      ) {
-
-        return res.json({
-          streams: [],
-          debug: {
-            id,
-            type,
-            reason:
-              "Unsupported ID prefix"
-          }
-        });
-      }
-
-      /*
-         מחפשים את ה־ID המדויק
-         בתוך קטלוג TVNetil.
-      */
-
-      const item =
-        await findCatalogItemById(
-          type,
-          id
-        );
-
-      if (!item) {
-
-        console.log(
-          "TVNETIL ITEM NOT FOUND:",
-          id
-        );
-
-        return res.json({
-          streams: [],
-          debug: {
-            id,
-            type,
-            found: false
-          }
-        });
-      }
-
-      /*
-         שם הסרט כפי שמופיע
-         בקטלוג TVNetil.
-      */
-
-      const title =
-        item.name ||
-        item.title ||
-        item.originalName ||
-        item.originalTitle ||
-        "";
+      const metaUrl =
+        `https://v3-cinemeta.strem.io/meta/${type}/${encodeURIComponent(id)}.json`;
 
       console.log(
-        "TVNETIL ITEM FOUND:",
-        id,
-        title
+        "CINEMETA:",
+        metaUrl
+      );
+
+      const meta =
+        await getJson(metaUrl);
+
+      const metaData =
+        meta?.meta || meta;
+
+      const possibleTitles = [
+        metaData?.name,
+        metaData?.originalName,
+        metaData?.title,
+        metaData?.originalTitle
+      ].filter(Boolean);
+
+      console.log(
+        "CINEMETA TITLES:",
+        possibleTitles
+      );
+
+      let tvResult = null;
+
+      /*
+         מנסים קודם את הכותרת הראשית,
+         ואז כותרות חלופיות.
+      */
+
+      for (
+        const searchTitle
+        of possibleTitles
+      ) {
+
+        try {
+
+          const result =
+            await findTVNetilReview(
+              searchTitle,
+              type
+            );
+
+          if (
+            result.success &&
+            result.title
+          ) {
+            tvResult = result;
+            break;
+          }
+
+        } catch (error) {
+
+          console.error(
+            "TVNETIL SEARCH ERROR:",
+            error.message
+          );
+
+        }
+      }
+
+      if (
+        !tvResult ||
+        !tvResult.title
+      ) {
+
+        console.log(
+          "NO TVNETIL RESULT"
+        );
+
+        return res.json({
+          streams: []
+        });
+      }
+
+      const hebrewTitle =
+        tvResult.title;
+
+      console.log(
+        "FOUND TVNETIL TITLE:",
+        hebrewTitle
       );
 
       /*
-         בשלב הזה מחזירים debug בלבד.
-         כך נוכל לוודא ש־Nuvio
-         מצליח להגיע לסרט הנכון.
+         חיפוש ב-FaveZone
       */
 
-      return res.json({
+      const fave =
+        await searchFave(
+          hebrewTitle
+        );
 
-        streams: [],
+      console.log(
+        "FAVE LINKS:",
+        fave.links.length
+      );
 
-        debug: {
-          id,
+      if (
+        !fave.links.length
+      ) {
+
+        return res.json({
+          streams: []
+        });
+      }
+
+      /*
+         המרה לפורמט Stream של Stremio/Nuvio
+      */
+
+      const streams =
+        buildStreams(
+          fave.links,
+          hebrewTitle,
           type,
-          found: true,
-          title,
+          id
+        );
 
-          year:
-            extractYear(
-              item.releaseInfo ||
-              item.releaseDate ||
-              item.year ||
-              ""
-            )
-        }
-
+      return res.json({
+        streams
       });
 
     } catch (error) {
@@ -1010,14 +970,8 @@ app.get(
         error.message
       );
 
-      return res.status(500).json({
-
-        streams: [],
-
-        error:
-          error.stack ||
-          error.message
-
+      return res.json({
+        streams: []
       });
     }
   }
@@ -1030,11 +984,9 @@ app.get(
 app.get(
   "/manifest.json",
   (_, res) => {
-
     res.json(
       MANIFEST
     );
-
   }
 );
 
@@ -1045,11 +997,9 @@ app.get(
 app.get(
   "/",
   (_, res) => {
-
     res.send(
       "TVNetil Direct Streams v1.8.0"
     );
-
   }
 );
 
@@ -1060,10 +1010,8 @@ app.get(
 app.listen(
   process.env.PORT || 3000,
   () => {
-
     console.log(
       "TVNetil Direct Streams v1.8.0 started"
     );
-
   }
 );
