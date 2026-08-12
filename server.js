@@ -2,14 +2,14 @@ import express from "express";
 
 const app = express();
 
-const TVNETIL = "https://www.tvnetil.net";
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "2.7.0",
+  version: "2.8.0",
   name: "TVNetil Direct Streams",
-  description: "Nuvio title -> TVNetil -> TVNetil result title -> search -> stream",
+  description:
+    "Nuvio Hebrew title -> TVNetil -> result title -> search -> stream",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -42,13 +42,7 @@ async function getJson(url, options = {}) {
     );
   }
 
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(
-      `Invalid JSON response: ${text.slice(0, 500)}`
-    );
-  }
+  return JSON.parse(text);
 }
 
 async function getText(url, options = {}) {
@@ -114,25 +108,38 @@ function normalize(value) {
     .toLowerCase();
 }
 
+function hasHebrew(value) {
+  return /[\u0590-\u05FF]/u.test(
+    String(value || "")
+  );
+}
+
 /* =========================================================
    SERPER
 ========================================================= */
 
 async function serperSearch(query, num = 10) {
   if (!SERPER_API_KEY) {
-    throw new Error("SERPER_API_KEY is missing");
+    throw new Error(
+      "SERPER_API_KEY is missing"
+    );
   }
 
-  console.log("SERPER SEARCH:", query);
+  console.log(
+    "SERPER SEARCH:",
+    query
+  );
 
   const response = await fetch(
     "https://google.serper.dev/search",
     {
       method: "POST",
+
       headers: {
         "X-API-KEY": SERPER_API_KEY,
         "Content-Type": "application/json"
       },
+
       body: JSON.stringify({
         q: query,
         gl: "il",
@@ -142,7 +149,8 @@ async function serperSearch(query, num = 10) {
     }
   );
 
-  const data = await response.json();
+  const data =
+    await response.json();
 
   if (!response.ok) {
     throw new Error(
@@ -154,16 +162,24 @@ async function serperSearch(query, num = 10) {
 }
 
 /* =========================================================
-   METADATA
+   CINEMETA
 ========================================================= */
 
-async function getMetadata(type, imdbId) {
+async function getMetadata(
+  type,
+  imdbId
+) {
   const url =
     `https://v3-cinemeta.strem.io/meta/${type}/${encodeURIComponent(imdbId)}.json`;
 
-  const data = await getJson(url);
+  const data =
+    await getJson(url);
 
-  return data?.meta || data || null;
+  return (
+    data?.meta ||
+    data ||
+    null
+  );
 }
 
 /* =========================================================
@@ -173,69 +189,118 @@ async function getMetadata(type, imdbId) {
 /*
    IMPORTANT:
 
-   We DO NOT translate.
-   We DO NOT invent a Hebrew title.
-   We DO NOT perform another search to create a title.
+   We do NOT translate.
+   We do NOT search for a Hebrew title.
+   We do NOT create a Hebrew title.
 
-   We use the title supplied to this resolver.
+   We only accept a title that already contains
+   Hebrew characters.
 
-   /stream can receive:
-   ?title=שם הסרט
-
-   If title is not supplied, Cinemeta's name is used only
-   because the Stream protocol gives us the IMDb ID.
+   If the title is English:
+   STOP.
 */
 
-function getInputTitle(req, metadata) {
-  const queryTitle =
+function getHebrewTitle(
+  req,
+  metadata
+) {
+  /*
+     If Nuvio supplies ?title=,
+     use it exactly as supplied.
+  */
+
+  const requestTitle =
     String(
       req.query.title || ""
     ).trim();
 
-  if (queryTitle) {
-    return cleanText(queryTitle);
-  }
-
-  const metadataTitle =
-    metadata?.name ||
-    metadata?.title ||
-    "";
-
-  return cleanText(
-    metadataTitle
-  );
-}
-
-/* =========================================================
-   STEP 1
-   SEARCH TVNETIL USING THE INPUT TITLE
-========================================================= */
-
-async function searchTVNetil(inputTitle) {
-  if (!inputTitle) {
-    throw new Error(
-      "Movie title is missing"
+  if (
+    requestTitle &&
+    hasHebrew(requestTitle)
+  ) {
+    return cleanText(
+      requestTitle
     );
   }
 
   /*
-     This is the FIRST search.
+     If ?title exists but is English,
+     DO NOT replace it with another title.
+  */
 
-     The title is passed exactly as received.
+  if (
+    requestTitle &&
+    !hasHebrew(requestTitle)
+  ) {
+    return null;
+  }
+
+  /*
+     Fallback to the metadata title.
+
+     Again: only accept Hebrew.
+  */
+
+  const metadataTitle =
+    cleanText(
+      metadata?.name ||
+      metadata?.title ||
+      ""
+    );
+
+  if (
+    metadataTitle &&
+    hasHebrew(metadataTitle)
+  ) {
+    return metadataTitle;
+  }
+
+  /*
+     English title = no result.
+  */
+
+  return null;
+}
+
+/* =========================================================
+   STEP 1
+   HEBREW TITLE -> TVNETIL
+========================================================= */
+
+async function searchTVNetil(
+  hebrewTitle
+) {
+  /*
+     Safety check:
+     TVNetil search is NEVER performed
+     without a Hebrew title.
+  */
+
+  if (
+    !hebrewTitle ||
+    !hasHebrew(hebrewTitle)
+  ) {
+    return [];
+  }
+
+  /*
+     The Hebrew title is used as received.
 
      No translation.
      No shortening.
-     No Hebrew reconstruction.
+     No alternative title.
   */
 
   const queries = [
-    `site:tvnetil.net/review "${inputTitle}"`,
-    `site:tvnetil.net/review ${inputTitle}`
+    `site:tvnetil.net/review "${hebrewTitle}"`,
+    `site:tvnetil.net/review ${hebrewTitle}`
   ];
 
   const allResults = [];
 
-  for (const query of queries) {
+  for (
+    const query of queries
+  ) {
     const data =
       await serperSearch(
         query,
@@ -262,7 +327,9 @@ async function searchTVNetil(inputTitle) {
           continue;
         }
 
-        allResults.push(item);
+        allResults.push(
+          item
+        );
       }
     }
   }
@@ -292,10 +359,12 @@ async function searchTVNetil(inputTitle) {
 
 function chooseTVNetilResult(
   results,
-  inputTitle
+  hebrewTitle
 ) {
   const wanted =
-    normalize(inputTitle);
+    normalize(
+      hebrewTitle
+    );
 
   const words =
     wanted
@@ -311,7 +380,7 @@ function chooseTVNetilResult(
   for (
     const item of results
   ) {
-    const resultText =
+    const text =
       normalize(
         `${item.title || ""} ${item.snippet || ""}`
       );
@@ -319,58 +388,42 @@ function chooseTVNetilResult(
     let score = 0;
 
     /*
-       Exact complete input title.
+       Exact title match.
     */
 
     if (
-      resultText.includes(
-        wanted
-      )
+      text.includes(wanted)
     ) {
       score += 200;
     }
 
     /*
-       Count matching words.
+       Matching words.
     */
 
     for (
       const word of words
     ) {
       if (
-        resultText.includes(
-          word
-        )
+        text.includes(word)
       ) {
         score += 15;
       }
     }
 
     /*
-       Review page bonus.
-    */
+       Must contain at least one
+       meaningful word from the Hebrew title.
 
-    if (
-      item.link?.includes(
-        "tvnetil.net/review/"
-      )
-    ) {
-      score += 20;
-    }
-
-    /*
-       We do NOT accept a result that
-       has absolutely no matching word.
-
-       This prevents:
-       Creed -> אבי ביטר
+       This prevents unrelated results
+       such as "אבי ביטר" from being selected.
     */
 
     if (
       words.length > 0 &&
       !words.some(
         word =>
-          resultText.includes(word)
+          text.includes(word)
       )
     ) {
       continue;
@@ -379,7 +432,8 @@ function chooseTVNetilResult(
     if (
       score > bestScore
     ) {
-      bestScore = score;
+      bestScore =
+        score;
 
       best = {
         ...item,
@@ -393,17 +447,15 @@ function chooseTVNetilResult(
 
 /* =========================================================
    STEP 2
-   GET TITLE OF THE SELECTED TVNETIL RESULT
+   GET TITLE FROM TVNETIL RESULT
 ========================================================= */
 
 async function getTVNetilResultTitle(
   selected
 ) {
   /*
-     First use the title supplied by
-     Serper for the TVNetil result.
-
-     This is the title of the result.
+     First use Serper's title for
+     the TVNetil result.
   */
 
   let title =
@@ -424,8 +476,7 @@ async function getTVNetilResultTitle(
   }
 
   /*
-     Fallback:
-     open the actual TVNetil page.
+     Fallback: open TVNetil page.
   */
 
   const html =
@@ -434,6 +485,10 @@ async function getTVNetilResultTitle(
     );
 
   let match;
+
+  /*
+     og:title
+  */
 
   match =
     html.match(
@@ -459,6 +514,10 @@ async function getTVNetilResultTitle(
     }
   }
 
+  /*
+     H1
+  */
+
   match =
     html.match(
       /<h1[^>]*>([\s\S]*?)<\/h1>/i
@@ -474,6 +533,10 @@ async function getTVNetilResultTitle(
       return title;
     }
   }
+
+  /*
+     HTML title
+  */
 
   match =
     html.match(
@@ -504,25 +567,28 @@ async function getTVNetilResultTitle(
 
 /* =========================================================
    STEP 3
-   SEARCH FINAL ENGINE USING TVNETIL TITLE
+   TVNETIL RESULT TITLE -> SEARCH ENGINE
 ========================================================= */
 
 async function searchFinalEngine(
   tvnetilTitle
 ) {
   if (!tvnetilTitle) {
-    throw new Error(
-      "TVNetil result title is missing"
-    );
+    return {
+      selected: null,
+      results: []
+    };
   }
 
   /*
-     IMPORTANT:
+     THIS IS THE SECOND SEARCH.
 
-     This is the SECOND search.
+     We use ONLY the title obtained
+     from the TVNetil result.
 
-     The query here is ONLY the title
-     obtained from the TVNetil result.
+     No IMDb.
+     No original title.
+     No Hebrew title.
   */
 
   const queries = [
@@ -572,11 +638,6 @@ async function searchFinalEngine(
     unique.push(item);
   }
 
-  /*
-     Choose the result matching
-     the TVNetil title.
-  */
-
   const wanted =
     normalize(
       tvnetilTitle
@@ -604,9 +665,7 @@ async function searchFinalEngine(
     let score = 0;
 
     if (
-      text.includes(
-        wanted
-      )
+      text.includes(wanted)
     ) {
       score += 200;
     }
@@ -615,9 +674,7 @@ async function searchFinalEngine(
       const word of words
     ) {
       if (
-        text.includes(
-          word
-        )
+        text.includes(word)
       ) {
         score += 10;
       }
@@ -626,7 +683,8 @@ async function searchFinalEngine(
     if (
       score > bestScore
     ) {
-      bestScore = score;
+      bestScore =
+        score;
 
       best = {
         ...item,
@@ -636,8 +694,11 @@ async function searchFinalEngine(
   }
 
   return {
-    selected: best,
-    results: unique
+    selected:
+      best,
+
+    results:
+      unique
   };
 }
 
@@ -646,25 +707,25 @@ async function searchFinalEngine(
 ========================================================= */
 
 async function resolveTVNetil(
-  inputTitle
+  hebrewTitle
 ) {
   console.log(
     "======================================"
   );
 
   console.log(
-    "INPUT TITLE:",
-    inputTitle
+    "HEBREW TITLE FROM NUVIO:",
+    hebrewTitle
   );
 
   /*
-     STEP 1
-     Input title -> TVNetil
+     STEP 1:
+     Hebrew title -> TVNetil
   */
 
   const tvnetilResults =
     await searchTVNetil(
-      inputTitle
+      hebrewTitle
     );
 
   console.log(
@@ -677,29 +738,39 @@ async function resolveTVNetil(
   ) {
     return {
       success: false,
-      step: "tvnetil-search",
-      inputTitle,
+
+      step:
+        "tvnetil-search",
+
+      hebrewTitle,
+
       streams: []
     };
   }
 
   /*
-     STEP 2
+     STEP 2:
      Choose TVNetil result
   */
 
   const selected =
     chooseTVNetilResult(
       tvnetilResults,
-      inputTitle
+      hebrewTitle
     );
 
   if (!selected) {
     return {
       success: false,
-      step: "tvnetil-selection",
-      inputTitle,
-      results: tvnetilResults,
+
+      step:
+        "tvnetil-selection",
+
+      hebrewTitle,
+
+      results:
+        tvnetilResults,
+
       streams: []
     };
   }
@@ -710,8 +781,8 @@ async function resolveTVNetil(
   );
 
   /*
-     STEP 3
-     Get title FROM TVNetil result
+     STEP 3:
+     Get title from TVNetil result
   */
 
   const tvnetilTitle =
@@ -722,10 +793,15 @@ async function resolveTVNetil(
   if (!tvnetilTitle) {
     return {
       success: false,
-      step: "tvnetil-result-title",
-      inputTitle,
+
+      step:
+        "tvnetil-result-title",
+
+      hebrewTitle,
+
       tvnetilUrl:
         selected.link,
+
       streams: []
     };
   }
@@ -736,8 +812,8 @@ async function resolveTVNetil(
   );
 
   /*
-     STEP 4
-     TVNetil title -> final search engine
+     STEP 4:
+     TVNetil title -> search engine
   */
 
   const finalSearch =
@@ -751,31 +827,38 @@ async function resolveTVNetil(
   if (!finalResult?.link) {
     return {
       success: false,
-      step: "final-search",
-      inputTitle,
+
+      step:
+        "final-search",
+
+      hebrewTitle,
+
       tvnetilTitle,
+
       tvnetilUrl:
         selected.link,
+
       searchResults:
         finalSearch.results,
+
       streams: []
     };
   }
 
   console.log(
-    "FINAL LINK:",
+    "FINAL URL:",
     finalResult.link
   );
 
   /*
-     STEP 5
-     Return final link to Nuvio
+     STEP 5:
+     Return stream
   */
 
   return {
     success: true,
 
-    inputTitle,
+    hebrewTitle,
 
     tvnetilTitle,
 
@@ -790,10 +873,12 @@ async function resolveTVNetil(
 
     finalSearchResult: {
       title:
-        finalResult.title || null,
+        finalResult.title ||
+        null,
 
       snippet:
-        finalResult.snippet || null,
+        finalResult.snippet ||
+        null,
 
       link:
         finalResult.link
@@ -832,8 +917,32 @@ app.get(
     if (!title) {
       return res.json({
         success: false,
+
         message:
-          "Use ?q=שם הסרט"
+          "Use ?q=שם הסרט בעברית"
+      });
+    }
+
+    /*
+       Test endpoint also refuses English.
+    */
+
+    if (
+      !hasHebrew(title)
+    ) {
+      return res.json({
+        success: false,
+
+        step:
+          "hebrew-title",
+
+        inputTitle:
+          title,
+
+        message:
+          "No Hebrew title. Search disabled.",
+
+        streams: []
       });
     }
 
@@ -846,6 +955,7 @@ app.get(
       return res.json(
         result
       );
+
     } catch (error) {
       console.error(
         error.stack ||
@@ -854,8 +964,11 @@ app.get(
 
       return res.status(500).json({
         success: false,
+
         error:
-          error.message
+          error.message,
+
+        streams: []
       });
     }
   }
@@ -886,108 +999,99 @@ app.get(
 
     try {
       /*
-         Nuvio/Stremio gives the addon the
-         IMDb ID.
+         Get metadata only to obtain the title
+         that Nuvio/Cinemeta associates with
+         this IMDb ID.
 
-         If a title is supplied in the request,
-         THAT title is used directly.
-
-         No translation.
-         No generated Hebrew title.
-         No extra title-resolution search.
+         IMPORTANT:
+         We DO NOT translate it.
+         We DO NOT search for a Hebrew title.
       */
 
-      let inputTitle =
-        String(
-          req.query.title || ""
-        ).trim();
+      const metadata =
+        await getMetadata(
+          type,
+          id
+        );
 
-      let metadataTitle =
-        null;
+      const hebrewTitle =
+        getHebrewTitle(
+          req,
+          metadata
+        );
 
       /*
-         Only if Nuvio did not supply ?title,
-         obtain the item's title from Cinemeta.
+         NO HEBREW TITLE =
+         NO SEARCH AT ALL.
       */
 
-      if (!inputTitle) {
-        const metadata =
-          await getMetadata(
-            type,
-            id
-          );
-
-        metadataTitle =
-          cleanText(
-            metadata?.name ||
-            metadata?.title ||
-            ""
-          );
-
-        inputTitle =
-          metadataTitle;
-      }
-
-      if (!inputTitle) {
+      if (!hebrewTitle) {
         return res.json({
           streams: [],
+
           tvnetil: {
             success: false,
-            step:
-              "input-title",
+
             imdbId:
               id,
+
+            metadataTitle:
+              cleanText(
+                metadata?.name ||
+                metadata?.title ||
+                ""
+              ),
+
+            step:
+              "hebrew-title",
+
             message:
-              "No movie title was supplied."
+              "No Hebrew title available. English search is disabled."
           }
         });
       }
 
-      console.log(
-        "IMDb ID:",
-        id
-      );
-
-      console.log(
-        "INPUT TITLE:",
-        inputTitle
-      );
-
       /*
-         EXACT ORDER:
+         Exact required flow:
 
-         input title
+         Hebrew title
          ->
-         TVNetil search
+         TVNetil
          ->
          TVNetil result title
          ->
-         final search
+         search engine
          ->
-         final URL
+         final link
          ->
          stream
       */
 
       const result =
         await resolveTVNetil(
-          inputTitle
+          hebrewTitle
         );
 
       return res.json({
         streams:
-          result.streams || [],
+          result.streams ||
+          [],
 
         tvnetil: {
+          ...result,
+
           success:
             result.success,
 
           imdbId:
             id,
 
-          metadataTitle,
-
-          ...result
+          metadataTitle:
+            cleanText(
+              metadata?.name ||
+              metadata?.title ||
+              ""
+            )
         }
       });
 
@@ -1002,6 +1106,10 @@ app.get(
 
         tvnetil: {
           success: false,
+
+          imdbId:
+            id,
+
           error:
             error.message
         }
@@ -1031,7 +1139,7 @@ app.get(
   "/",
   (_, res) => {
     res.send(
-      "TVNetil Direct Streams 2.7.0"
+      "TVNetil Direct Streams 2.8.0"
     );
   }
 );
@@ -1044,7 +1152,7 @@ app.listen(
   process.env.PORT || 3000,
   () => {
     console.log(
-      "TVNetil Direct Streams 2.7.0 started"
+      "TVNetil Direct Streams 2.8.0 started"
     );
   }
 );
