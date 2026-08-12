@@ -8,7 +8,7 @@ const FAVE = "https://www.favez0ne.net/search.php";
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "1.8.0",
+  version: "1.8.1",
   name: "TVNetil Direct Streams",
   description: "TVNetil Hebrew title -> FaveZone streams",
   resources: ["stream"],
@@ -99,9 +99,7 @@ function cleanText(value) {
 }
 
 function extractYear(value) {
-  const match = String(value || "")
-    .match(/\b(19|20)\d{2}\b/);
-
+  const match = String(value || "").match(/\b(19|20)\d{2}\b/);
   return match ? Number(match[0]) : null;
 }
 
@@ -198,9 +196,7 @@ async function searchTVNetilCatalog(
 
       if (
         wantedWords.length > 0 &&
-        matched >= Math.ceil(
-          wantedWords.length * 0.6
-        )
+        matched >= Math.ceil(wantedWords.length * 0.6)
       ) {
         results.push(item);
       }
@@ -254,17 +250,13 @@ function extractReviewLinks(html) {
 
   let match;
 
-  while (
-    (match = regex.exec(html)) !== null
-  ) {
+  while ((match = regex.exec(html)) !== null) {
     results.push(
       `${TVNETIL}${match[1]}`
     );
   }
 
-  return [
-    ...new Set(results)
-  ];
+  return [...new Set(results)];
 }
 
 /* =========================================================
@@ -278,20 +270,18 @@ function extractTVNetilTitle(html) {
     );
 
   if (match) {
-    let title =
-      cleanText(match[1]);
+    let title = cleanText(match[1]);
 
-    title =
-      title
-        .replace(
-          /\s*[-|–—]\s*TVNetil.*$/iu,
-          ""
-        )
-        .replace(
-          /\s*[-|–—]\s*TVNet.*$/iu,
-          ""
-        )
-        .trim();
+    title = title
+      .replace(
+        /\s*[-|–—]\s*TVNetil.*$/iu,
+        ""
+      )
+      .replace(
+        /\s*[-|–—]\s*TVNet.*$/iu,
+        ""
+      )
+      .trim();
 
     if (
       title &&
@@ -311,8 +301,7 @@ function extractTVNetilTitle(html) {
       );
 
     if (match) {
-      const title =
-        cleanText(match[1]);
+      const title = cleanText(match[1]);
 
       if (
         title &&
@@ -336,13 +325,11 @@ async function getTVNetilReview(url) {
     url
   );
 
-  const html =
-    await getText(url);
+  const html = await getText(url);
 
   return {
     url,
-    title:
-      extractTVNetilTitle(html),
+    title: extractTVNetilTitle(html),
     html
   };
 }
@@ -436,7 +423,7 @@ async function searchFavez0ne(title) {
 
       headers: {
         "Content-Type":
-          "application/x-www-form-urlencoded; charset=windows-1255",
+          "application/x-www-form-urlencoded",
 
         "Referer":
           "https://www.favez0ne.net/",
@@ -473,9 +460,7 @@ function extractFavezLinks(html) {
         .replace(/[\r\n\t]/g, "")
         .trim();
 
-    if (
-      /^https?:\/\//i.test(url)
-    ) {
+    if (/^https?:\/\//i.test(url)) {
       results.push(url);
     }
   }
@@ -484,8 +469,7 @@ function extractFavezLinks(html) {
     /https?:\/\/[^\s"'<>\\]+/gi;
 
   while (
-    (match =
-      directRegex.exec(html)) !== null
+    (match = directRegex.exec(html)) !== null
   ) {
     let url =
       decodeHtml(match[0])
@@ -496,8 +480,7 @@ function extractFavezLinks(html) {
     results.push(url);
   }
 
-  const unique =
-    [...new Set(results)];
+  const unique = [...new Set(results)];
 
   const allowed = [
     "pixeldrain.com",
@@ -519,9 +502,7 @@ function extractFavezLinks(html) {
       return allowed.some(
         domain =>
           host === domain ||
-          host.endsWith(
-            "." + domain
-          )
+          host.endsWith("." + domain)
       );
     } catch {
       return false;
@@ -544,7 +525,7 @@ async function searchFave(title) {
 }
 
 /* =========================================================
-   CONVERT FAVE LINKS TO NUVIO STREAMS
+   STREAMS
 ========================================================= */
 
 function buildStreams(
@@ -553,28 +534,26 @@ function buildStreams(
   type,
   id
 ) {
-  return links.map(
-    (url, index) => ({
-      name:
-        `TVNetil • ${title}`,
+  return links.map((url) => ({
+    name:
+      `TVNetil • ${title}`,
 
-      title:
-        `צפייה ישירה • ${title}`,
+    title:
+      `צפייה ישירה • ${title}`,
 
-      url,
+    url,
 
-      type:
-        "url",
+    type:
+      "url",
 
-      behaviorHints: {
-        bingeGroup:
-          `tvnetil-${type}-${id}`,
+    behaviorHints: {
+      bingeGroup:
+        `tvnetil-${type}-${id}`,
 
-        notWebReady:
-          false
-      }
-    })
-  );
+      notWebReady:
+        false
+    }
+  }));
 }
 
 /* =========================================================
@@ -619,12 +598,9 @@ app.get(
         });
       }
 
-      const hebrewTitle =
-        tv.title;
-
       const fave =
         await searchFave(
-          hebrewTitle
+          tv.title
         );
 
       return res.json({
@@ -644,12 +620,12 @@ app.get(
             tv.reviewUrl,
 
           title:
-            hebrewTitle
+            tv.title
         },
 
         favezone: {
           searchTitle:
-            hebrewTitle,
+            tv.title,
 
           htmlLength:
             fave.htmlLength,
@@ -804,7 +780,6 @@ app.get(
 app.get(
   "/stream/:type/:id.json",
   async (req, res) => {
-
     const type =
       req.params.type === "series"
         ? "series"
@@ -827,15 +802,10 @@ app.get(
       });
     }
 
-    /*
-       Nuvio שולח בדרך כלל IMDb ID:
-       tt1234567
-
-       כרגע אין לנו metadata ישיר מה-ID,
-       לכן ננסה למצוא את הכותרת דרך Cinemeta.
-    */
-
     try {
+      /* -----------------------------------------------
+         Get metadata from Cinemeta
+      ------------------------------------------------ */
 
       const metaUrl =
         `https://v3-cinemeta.strem.io/meta/${type}/${encodeURIComponent(id)}.json`;
@@ -863,20 +833,17 @@ app.get(
         possibleTitles
       );
 
-      let tvResult = null;
+      /* -----------------------------------------------
+         Search TVNetil
+      ------------------------------------------------ */
 
-      /*
-         מנסים קודם את הכותרת הראשית,
-         ואז כותרות חלופיות.
-      */
+      let tvResult = null;
 
       for (
         const searchTitle
         of possibleTitles
       ) {
-
         try {
-
           const result =
             await findTVNetilReview(
               searchTitle,
@@ -890,14 +857,11 @@ app.get(
             tvResult = result;
             break;
           }
-
         } catch (error) {
-
           console.error(
             "TVNETIL SEARCH ERROR:",
             error.message
           );
-
         }
       }
 
@@ -905,7 +869,6 @@ app.get(
         !tvResult ||
         !tvResult.title
       ) {
-
         console.log(
           "NO TVNETIL RESULT"
         );
@@ -923,9 +886,9 @@ app.get(
         hebrewTitle
       );
 
-      /*
-         חיפוש ב-FaveZone
-      */
+      /* -----------------------------------------------
+         Search FaveZone
+      ------------------------------------------------ */
 
       const fave =
         await searchFave(
@@ -937,18 +900,15 @@ app.get(
         fave.links.length
       );
 
-      if (
-        !fave.links.length
-      ) {
-
+      if (!fave.links.length) {
         return res.json({
           streams: []
         });
       }
 
-      /*
-         המרה לפורמט Stream של Stremio/Nuvio
-      */
+      /* -----------------------------------------------
+         Convert to Nuvio/Stremio streams
+      ------------------------------------------------ */
 
       const streams =
         buildStreams(
@@ -963,7 +923,6 @@ app.get(
       });
 
     } catch (error) {
-
       console.error(
         "STREAM ERROR:",
         error.stack ||
@@ -984,9 +943,7 @@ app.get(
 app.get(
   "/manifest.json",
   (_, res) => {
-    res.json(
-      MANIFEST
-    );
+    res.json(MANIFEST);
   }
 );
 
@@ -998,20 +955,13 @@ app.get(
   "/",
   (_, res) => {
     res.send(
-      "TVNetil Direct Streams v1.8.0"
+      "TVNetil Direct Streams v1.8.1"
     );
   }
 );
 
 /* =========================================================
-   START
+   VERCEL EXPORT
 ========================================================= */
 
-app.listen(
-  process.env.PORT || 3000,
-  () => {
-    console.log(
-      "TVNetil Direct Streams v1.8.0 started"
-    );
-  }
-);
+export default app;
