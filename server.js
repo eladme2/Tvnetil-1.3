@@ -6,7 +6,7 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "3.1.0",
+  version: "3.2.0",
   name: "TVNetil Direct Streams",
   description:
     "Nuvio Hebrew title -> TVNetil -> result title -> search engine -> external stream",
@@ -115,6 +115,13 @@ async function scraperSearch(query, num = 20) {
       },
 
       body: JSON.stringify({
+        /*
+         * חשוב:
+         * q הוא טקסט רגיל בלבד.
+         * אין site:
+         * אין -site:
+         * אין מרכאות.
+         */
         q: query,
         gl: "il",
         hl: "he",
@@ -165,9 +172,9 @@ function getHebrewTitle(
   metadata
 ) {
   /*
-     קודם כל title שמגיע בבקשה.
-     חייב להיות בעברית.
-  */
+   * אם נשלח title בבקשה,
+   * משתמשים בו רק אם הוא בעברית.
+   */
 
   const requestTitle =
     String(
@@ -187,9 +194,9 @@ function getHebrewTitle(
   }
 
   /*
-     fallback למטאדאטה.
-     גם כאן מקבלים רק עברית.
-  */
+   * אחרת לוקחים מהמטאדאטה.
+   * גם כאן עברית בלבד.
+   */
 
   const metadataTitle =
     cleanText(
@@ -210,7 +217,7 @@ function getHebrewTitle(
 
 /* =========================================================
    STEP 1
-   HEBREW TITLE -> SEARCH ENGINE
+   HEBREW TITLE -> SEARCH ENGINE -> TVNETIL
 ========================================================= */
 
 async function searchTVNetil(
@@ -224,16 +231,18 @@ async function searchTVNetil(
   }
 
   /*
-     חשוב:
-     חיפוש רגיל בלבד.
-
-     אין site:
-     אין -site:
-     אין קיצור דרך.
-  */
+   * חיפוש רגיל בלבד.
+   *
+   * אין:
+   * site:
+   * -site:
+   * "..."
+   *
+   * זה חשוב בגלל מגבלת Serper Free.
+   */
 
   const query =
-    `"${hebrewTitle}"`;
+    hebrewTitle;
 
   const data =
     await scraperSearch(
@@ -249,11 +258,9 @@ async function searchTVNetil(
       : [];
 
   /*
-     עכשיו הסקרפר החזיר תוצאות.
-
-     רק כאן אנחנו בודקים מי מהן
-     באמת TVNetil.
-  */
+   * רק אחרי שקיבלנו את התוצאות
+   * מסננים את TVNetil בקוד.
+   */
 
   const tvnetilResults =
     organic.filter(
@@ -310,8 +317,8 @@ function chooseTVNetilResult(
     let score = 0;
 
     /*
-       התאמה מלאה.
-    */
+     * התאמה מלאה.
+     */
 
     if (
       text.includes(wanted)
@@ -320,8 +327,8 @@ function chooseTVNetilResult(
     }
 
     /*
-       התאמת מילים.
-    */
+     * התאמת מילים.
+     */
 
     for (
       const word of words
@@ -334,9 +341,8 @@ function chooseTVNetilResult(
     }
 
     /*
-       אם אין אפילו מילה אחת תואמת,
-       לא מדובר בסרט המבוקש.
-    */
+     * אין התאמה בכלל = לא התוצאה.
+     */
 
     if (
       words.length > 0 &&
@@ -366,18 +372,16 @@ function chooseTVNetilResult(
 
 /* =========================================================
    STEP 3
-   TVNETIL RESULT TITLE
+   TAKE TITLE FROM TVNETIL RESULT
 ========================================================= */
 
 function getTVNetilTitle(
   selected
 ) {
   /*
-     הכותרת נלקחת ישירות מתוצאת
-     החיפוש של TVNetil.
-
-     אין חיפוש נוסף כאן.
-  */
+   * הכותרת נלקחת מתוצאת החיפוש
+   * של TVNetil.
+   */
 
   let title =
     cleanText(
@@ -411,17 +415,19 @@ async function searchExternal(
   }
 
   /*
-     כאן משתמשים בדיוק בכותרת שקיבלנו
-     מ-TVNetil.
-
-     חיפוש רגיל בלבד.
-
-     אין site:
-     אין -site:
-  */
+   * חשוב מאוד:
+   *
+   * כאן מחפשים בדיוק את הכותרת שקיבלנו
+   * מתוצאת TVNetil.
+   *
+   * חיפוש רגיל.
+   * בלי site:
+   * בלי -site:
+   * בלי מרכאות.
+   */
 
   const query =
-    `"${tvnetilTitle}"`;
+    tvnetilTitle;
 
   const data =
     await scraperSearch(
@@ -437,9 +443,8 @@ async function searchExternal(
       : [];
 
   /*
-     רק אחרי קבלת התוצאות
-     מסננים TVNetil.
-  */
+   * עכשיו מסננים TVNetil בקוד.
+   */
 
   const externalResults =
     organic.filter(
@@ -468,8 +473,9 @@ async function searchExternal(
   }
 
   /*
-     בחירת התוצאה המתאימה ביותר.
-  */
+   * בחירת התוצאה המתאימה ביותר
+   * לכותרת של TVNetil.
+   */
 
   const wanted =
     normalize(
@@ -498,8 +504,8 @@ async function searchExternal(
     let score = 0;
 
     /*
-       התאמה מלאה של הכותרת.
-    */
+     * התאמה מלאה של הכותרת.
+     */
 
     if (
       text.includes(wanted)
@@ -508,8 +514,8 @@ async function searchExternal(
     }
 
     /*
-       התאמת מילים.
-    */
+     * התאמת מילים.
+     */
 
     for (
       const word of words
@@ -522,9 +528,9 @@ async function searchExternal(
     }
 
     /*
-       תוצאה שאין לה שום קשר לכותרת
-       לא מתקבלת.
-    */
+     * תוצאה ללא שום התאמה
+     * לא מתקבלת.
+     */
 
     if (
       words.length > 0 &&
@@ -569,21 +575,19 @@ async function resolveTVNetil(
     "======================================"
   );
 
+  /*
+   * STEP 1
+   * Nuvio Hebrew title
+   * ->
+   * search engine
+   * ->
+   * TVNetil
+   */
+
   console.log(
     "STEP 1 - HEBREW TITLE:",
     hebrewTitle
   );
-
-  /*
-     STEP 1
-     שם עברי
-     ->
-     מנוע חיפוש
-     ->
-     תוצאות
-     ->
-     סינון TVNetil
-  */
 
   const tvnetilResults =
     await searchTVNetil(
@@ -611,9 +615,9 @@ async function resolveTVNetil(
   }
 
   /*
-     STEP 2
-     בחירת תוצאת TVNetil.
-  */
+   * STEP 2
+   * בחירת תוצאת TVNetil.
+   */
 
   const selected =
     chooseTVNetilResult(
@@ -640,9 +644,9 @@ async function resolveTVNetil(
   );
 
   /*
-     STEP 3
-     לקיחת הכותרת של תוצאת TVNetil.
-  */
+   * STEP 3
+   * הכותרת מתוצאת TVNetil.
+   */
 
   const tvnetilTitle =
     getTVNetilTitle(
@@ -671,11 +675,11 @@ async function resolveTVNetil(
   );
 
   /*
-     STEP 4
-     הכותרת של TVNetil
-     ->
-     מנוע החיפוש
-  */
+   * STEP 4
+   * הכותרת של TVNetil
+   * ->
+   * search engine
+   */
 
   const externalSearch =
     await searchExternal(
@@ -712,9 +716,9 @@ async function resolveTVNetil(
   );
 
   /*
-     STEP 5
-     Stream.
-  */
+   * STEP 5
+   * החזרת Stream.
+   */
 
   return {
     success: true,
@@ -764,7 +768,7 @@ async function resolveTVNetil(
 }
 
 /* =========================================================
-   TEST
+   TEST TITLE
 ========================================================= */
 
 app.get(
@@ -785,8 +789,8 @@ app.get(
     }
 
     /*
-       English is disabled.
-    */
+     * English search disabled.
+     */
 
     if (
       !hasHebrew(title)
@@ -833,7 +837,7 @@ app.get(
 
 /* =========================================================
    STREAM ENDPOINT
-   הנתיב נשאר בדיוק כמו שקבענו
+   הנתיב נשאר ללא שינוי
 ========================================================= */
 
 app.get(
@@ -857,8 +861,8 @@ app.get(
 
     try {
       /*
-         Nuvio / Cinemeta metadata.
-      */
+       * Nuvio / Cinemeta metadata.
+       */
 
       const metadata =
         await getMetadata(
@@ -874,8 +878,8 @@ app.get(
         );
 
       /*
-         כאן חייב להיות שם עברי.
-      */
+       * חייבים שם בעברית.
+       */
 
       const hebrewTitle =
         getHebrewTitle(
@@ -884,10 +888,9 @@ app.get(
         );
 
       /*
-         אין עברית:
-         עוצרים.
-         לא מחפשים Creed באנגלית.
-      */
+       * אם אין עברית:
+       * לא מחפשים אנגלית.
+       */
 
       if (!hebrewTitle) {
         return res.json({
@@ -911,22 +914,22 @@ app.get(
       }
 
       /*
-         הסדר הקבוע:
-
-         Nuvio Hebrew title
-         ->
-         search engine
-         ->
-         TVNetil result
-         ->
-         TVNetil result title
-         ->
-         search engine
-         ->
-         external URL
-         ->
-         stream
-      */
+       * הסדר הקבוע:
+       *
+       * Nuvio Hebrew title
+       * ->
+       * search engine
+       * ->
+       * TVNetil
+       * ->
+       * TVNetil result title
+       * ->
+       * search engine
+       * ->
+       * external URL
+       * ->
+       * Stream
+       */
 
       const result =
         await resolveTVNetil(
@@ -992,7 +995,7 @@ app.get(
   "/",
   (_, res) => {
     res.send(
-      "TVNetil Direct Streams 3.1.0"
+      "TVNetil Direct Streams 3.2.0"
     );
   }
 );
@@ -1005,7 +1008,7 @@ app.listen(
   process.env.PORT || 3000,
   () => {
     console.log(
-      "TVNetil Direct Streams 3.1.0 started"
+      "TVNetil Direct Streams 3.2.0 started"
     );
   }
 );
