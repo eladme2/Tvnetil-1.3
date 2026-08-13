@@ -8,39 +8,34 @@ const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "7.8.0",
+  version: "7.9.0",
   name: "TVNetil Direct Streams",
-  description: "Binary Buffer Windows-1255 Decoding -> Fave -> Streams",
+  description: "Fix ScraperAPI Hebrew Double Encoding -> Fave -> Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
 /* =========================================================
-   TEXT & ENCODING UTILS
+   TEXT & ENCODING FIXES
 ========================================================= */
 
-function decodeHebrewBuffer(buffer) {
-  // ניסיון פענוח ב-Windows-1255 / ISO-8859-8
+function fixGarbledHebrew(text) {
+  if (!text) return "";
+  
+  // אם יש תווי replacement בלתי תקינים של UTF-8, מנקים אותם
+  let cleaned = text.replace(/\uFFFD/g, "").replace(/׳Ÿֲ¿ֲ½/g, "").trim();
+  
+  // תיקון Double UTF-8 Encoding נפוץ בעברית
   try {
-    const winDecoder = new TextDecoder("windows-1255");
-    const text = winDecoder.decode(buffer);
-    if (text && /[\u0590-\u05FF]/.test(text)) {
-      return text;
+    const bytes = new Uint8Array([...cleaned].map(c => c.charCodeAt(0) & 0xff));
+    const decoded = new TextDecoder("utf-8").decode(bytes);
+    if (/[\u0590-\u05FF]/.test(decoded)) {
+      return decoded;
     }
   } catch (e) {}
 
-  try {
-    const isoDecoder = new TextDecoder("iso-8859-8");
-    const text = isoDecoder.decode(buffer);
-    if (text && /[\u0590-\u05FF]/.test(text)) {
-      return text;
-    }
-  } catch (e) {}
-
-  // ברירת מחדל UTF-8
-  const utfDecoder = new TextDecoder("utf-8");
-  return utfDecoder.decode(buffer);
+  return cleaned;
 }
 
 function decodeHtmlEntities(str) {
@@ -65,7 +60,7 @@ function cleanTvnetilExactTitle(rawTitle) {
     .replace(/\s*[-|–—]\s*סרטים.*$/iu, "")
     .trim();
 
-  return title;
+  return fixGarbledHebrew(title);
 }
 
 function extractUrlsFromText(text) {
@@ -94,21 +89,26 @@ async function serperSearch(query, num = 20) {
 }
 
 /* =========================================================
-   שלב 1: משיכת דפים מ-TVNetil עם פענוח בייטים נקי
+   שלב 1: משיכת עמוד מ-TVNetil
 ========================================================= */
 
 async function fetchTvnetilHtml(targetUrl) {
-  const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}`;
-  const response = await fetch(scraperUrl);
+  // הוספת פרמטרים שמכריחים את ScraperAPI לשמור על הקידוד המקורי
+  const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}&keep_headers=true&country_code=il`;
+  
+  const response = await fetch(scraperUrl, {
+    headers: {
+      "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36"
+    }
+  });
 
   if (!response.ok) {
     const errText = await response.text();
     throw new Error(`ScraperAPI HTTP ${response.status}: ${errText.substring(0, 300)}`);
   }
 
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  return decodeHebrewBuffer(buffer);
+  return await response.text();
 }
 
 async function getExactTitleFromTvnetilPage(hebrewTitle) {
@@ -148,10 +148,12 @@ async function getExactTitleFromTvnetilPage(hebrewTitle) {
     rawExtractedTitle = $search("a[href*='/review/']").first().text() || "";
   }
 
-  const exactTitle = cleanTvnetilExactTitle(rawExtractedTitle);
+  let exactTitle = cleanTvnetilExactTitle(rawExtractedTitle);
 
-  if (!exactTitle) {
-    throw new Error("לא ניתן היה להוציא את כותרת הסרט המקורית מעמוד ה-TVNetil");
+  // אם הקידוד המקורי נכשל כליל והכותרת ריקה - נשתמש בשם המקורי שחופש
+  if (!exactTitle || exactTitle.length < 2) {
+    console.log("[נסיון החלפה] השם המקורי מעמוד TVNetil נהרס, משתמש בשם החיפוש המקורי:", hebrewTitle);
+    exactTitle = hebrewTitle;
   }
 
   console.log("[שלב 2] הכותרת המקורית שהועתקה מעמוד הסרט:", exactTitle);
@@ -330,7 +332,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.8.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.9.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
