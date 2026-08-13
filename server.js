@@ -3,14 +3,14 @@ import * as cheerio from "cheerio";
 
 const app = express();
 
-const SERPER_API_KEY = process.env.SERPER_API_KEY;
-const SCRAPER_API_KEY = process.env.SCRAPER_API_KEY;
+const SERPER_API_KEY = process.env.SERPER_API_KEY ? process.env.SERPER_API_KEY.trim() : "";
+const SCRAPER_API_KEY = process.env.SCRAPER_API_KEY ? process.env.SCRAPER_API_KEY.trim() : "";
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
   version: "6.1.0",
   name: "TVNetil Direct Streams",
-  description: "Nuvio -> Serper 1 -> Scrape TVNetil HTML via ScraperAPI Ultra -> Serper 2 -> Fave Streams",
+  description: "Nuvio -> Serper 1 -> Scrape TVNetil HTML via ScraperAPI -> Serper 2 -> Fave Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -78,7 +78,7 @@ async function serperSearch(query, num = 20) {
 ========================================================= */
 
 async function scrapeTVNetilTitleFromUrl(targetUrl) {
-  console.log("[שלב 3] שולח בקשה ל-ScraperAPI מוגבר עבור:", targetUrl);
+  console.log("[שלב 3] שולח בקשה ל-ScraperAPI עבור:", targetUrl);
 
   if (!SCRAPER_API_KEY) {
     throw new Error("SCRAPER_API_KEY is missing in environment variables");
@@ -86,8 +86,8 @@ async function scrapeTVNetilTitleFromUrl(targetUrl) {
 
   const secureUrl = targetUrl.replace(/^http:/i, "https:");
 
-  // render=true + ultra_premium=true מפעילים Headless Browser ו-Residential IPs לעקיפת Cloudflare 403
-  const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(secureUrl)}&render=true&ultra_premium=true`;
+  // שימוש ב-render=true בסטנדרט הנתמך בחשבון ScraperAPI
+  const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(secureUrl)}&render=true`;
 
   const response = await fetch(scraperUrl);
 
@@ -238,7 +238,7 @@ async function resolveTVNetil(hebrewTitle) {
 
   const tvnetilUrl = tvnetilItem.link;
 
-  // שלב 3: ScraperAPI Ultra עובר את Cloudflare 403, נכנס ל-HTML ומחלץ כותרת
+  // שלב 3: ScraperAPI עובר את Cloudflare, נכנס ל-HTML ומחלץ כותרת מדויקת
   let exactTitleFromHtml = "";
   try {
     exactTitleFromHtml = await scrapeTVNetilTitleFromUrl(tvnetilUrl);
