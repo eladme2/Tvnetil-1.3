@@ -8,16 +8,16 @@ const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "7.0.0",
+  version: "7.1.0",
   name: "TVNetil Direct Streams",
-  description: "Direct Search on TVNetil via ScraperAPI -> Extract HTML Title -> Serper Fave -> Streams",
+  description: "Direct TVNetil Search via ScraperAPI with Windows-1255 Encoding Fix -> Fave -> Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
 /* =========================================================
-   TEXT UTILS & CLEANING
+   TEXT UTILS & ENCODING FIX
 ========================================================= */
 
 function decodeHtml(value) {
@@ -45,6 +45,7 @@ function cleanTVNetilTitle(rawTitle) {
     .replace(/\s*[-|–—]\s*TVNetil.*$/iu, "")
     .replace(/^TVNetil\.net\s*[-|:]\s*/iu, "")
     .replace(/\s*[-|–—]\s*סרטים.*$/iu, "")
+    .replace(/\b(1080p|720p|WEB-DL|WEBRip|HD|DVDRip|XviD|AAC|HEVC|x264|x265)\b/gi, "")
     .trim();
 }
 
@@ -55,7 +56,7 @@ function extractUrlsFromText(text) {
 }
 
 /* =========================================================
-   SERPER SEARCH (משמש רק עבור Favez0ne)
+   SERPER SEARCH
 ========================================================= */
 
 async function serperSearch(query, num = 20) {
@@ -74,7 +75,7 @@ async function serperSearch(query, num = 20) {
 }
 
 /* =========================================================
-   שלב 1+2: פנייה ישירה ל-TVNetil דרך ScraperAPI וחילוץ הכותרת
+   שלב 1+2: פנייה ישירה ל-TVNetil דרך ScraperAPI + פענוח עברית (Windows-1255)
 ========================================================= */
 
 async function searchAndExtractTVNetilTitle(hebrewTitle) {
@@ -84,7 +85,6 @@ async function searchAndExtractTVNetilTitle(hebrewTitle) {
     throw new Error("SCRAPER_API_KEY is missing in environment variables");
   }
 
-  // פנייה ישירה למנוע החיפוש הפנימי של TVNetil
   const tvnetilSearchUrl = `https://www.tvnetil.net/index.php?act=search&CODE=01&q=${encodeURIComponent(hebrewTitle)}`;
   const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(tvnetilSearchUrl)}`;
 
@@ -95,23 +95,37 @@ async function searchAndExtractTVNetilTitle(hebrewTitle) {
     throw new Error(`ScraperAPI HTTP ${response.status}: ${errText.substring(0, 300)}`);
   }
 
-  const html = await response.text();
+  // פתרון בעיית הקידוד: קריאת הבייטים ופענוח עברית לפי Windows-1255
+  const buffer = await response.arrayBuffer();
+  let html = "";
+  try {
+    const decoder = new TextDecoder("windows-1255");
+    html = decoder.decode(buffer);
+  } catch {
+    const fallbackDecoder = new TextDecoder("utf-8");
+    html = fallbackDecoder.decode(buffer);
+  }
+
   const $ = cheerio.load(html);
 
-  // חילוץ הכותרת מתוך תוצאות החיפוש ב-HTML של TVNetil
   let exactTitle =
     $("h1.entry-title").text() ||
     $(".review-header h1").text() ||
     $(".title-review").text() ||
     $(".search-result a").first().text() ||
+    $("a[href*='/review/']").first().text() ||
     $("h1").first().text() ||
     $("title").text() ||
     "";
 
   exactTitle = cleanTVNetilTitle(exactTitle);
 
-  if (!exactTitle || exactTitle.toLowerCase().includes("just a moment")) {
-    throw new Error("לא נמצאה כותרת תקינה ב-TVNetil או שהבקשה נחסמה");
+  if (!exactTitle || exactTitle.includes("") || exactTitle.toLowerCase().includes("just a moment")) {
+    // אם המנוע הפנימי לא החזיר כותרת נקייה, ננסה לחלץ בעזרת ביטוי רגולרי מה-HTML
+    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+    if (titleMatch && titleMatch[1]) {
+      exactTitle = cleanTVNetilTitle(titleMatch[1]);
+    }
   }
 
   console.log("[שלב 2] הכותרת המדויקת שחולצה מ-TVNetil:", exactTitle);
@@ -225,7 +239,6 @@ async function resolveTVNetil(hebrewTitle) {
   let exactTitle = "";
   let tvnetilSearchUrl = "";
 
-  // 1+2. פנייה ישירה ל-TVNetil דרך ScraperAPI וחילוץ הכותרת בעברית
   try {
     const scraped = await searchAndExtractTVNetilTitle(hebrewTitle);
     exactTitle = scraped.exactTitle;
@@ -239,7 +252,6 @@ async function resolveTVNetil(hebrewTitle) {
     };
   }
 
-  // 3. חיפוש ב-Favez0ne עם הכותרת המדויקת באמצעות Serper
   console.log("[שלב 3] מחפש ב-Favez0ne עבור הכותרת:", exactTitle);
   const faveData = await serperSearch(`site:favez0ne.net "${exactTitle}"`, 20);
   let organic = Array.isArray(faveData?.organic) ? faveData.organic : [];
@@ -260,8 +272,6 @@ async function resolveTVNetil(hebrewTitle) {
   }
 
   const faveUrl = organic[0].link;
-
-  // 4. חילוץ הסטרימים (PixelDrain / GoFile)
   const streams = await scrapeFaveToNuvioStreams(faveUrl, exactTitle);
 
   return {
@@ -290,7 +300,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.0.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.1.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
