@@ -3,14 +3,14 @@ import * as cheerio from "cheerio";
 
 const app = express();
 
-const SERPER_API_KEY = process.env.SERPER_API_KEY ? process.env.SERPER_API_KEY.trim() : "";
-const SCRAPER_API_KEY = process.env.SCRAPER_API_KEY ? process.env.SCRAPER_API_KEY.trim() : "";
+const SERPER_API_KEY = (process.env.SERPER_API_KEY || "").trim();
+const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "6.1.0",
+  version: "7.0.0",
   name: "TVNetil Direct Streams",
-  description: "Nuvio -> Serper 1 -> Scrape TVNetil HTML via ScraperAPI -> Serper 2 -> Fave Streams",
+  description: "Direct Search on TVNetil via ScraperAPI -> Extract HTML Title -> Serper Fave -> Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -55,7 +55,7 @@ function extractUrlsFromText(text) {
 }
 
 /* =========================================================
-   SERPER SEARCH
+   SERPER SEARCH (משמש רק עבור Favez0ne)
 ========================================================= */
 
 async function serperSearch(query, num = 20) {
@@ -74,20 +74,19 @@ async function serperSearch(query, num = 20) {
 }
 
 /* =========================================================
-   שלב 3: SCRAPER API - עקיפת CLOUDFLARE 403 וחילוץ כותרת מה-HTML
+   שלב 1+2: פנייה ישירה ל-TVNetil דרך ScraperAPI וחילוץ הכותרת
 ========================================================= */
 
-async function scrapeTVNetilTitleFromUrl(targetUrl) {
-  console.log("[שלב 3] שולח בקשה ל-ScraperAPI עבור:", targetUrl);
+async function searchAndExtractTVNetilTitle(hebrewTitle) {
+  console.log("[שלב 1] פנייה ישירה ל-TVNetil דרך ScraperAPI עבור:", hebrewTitle);
 
   if (!SCRAPER_API_KEY) {
     throw new Error("SCRAPER_API_KEY is missing in environment variables");
   }
 
-  const secureUrl = targetUrl.replace(/^http:/i, "https:");
-
-  // שימוש ב-render=true בסטנדרט הנתמך בחשבון ScraperAPI
-  const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(secureUrl)}&render=true`;
+  // פנייה ישירה למנוע החיפוש הפנימי של TVNetil
+  const tvnetilSearchUrl = `https://www.tvnetil.net/index.php?act=search&CODE=01&q=${encodeURIComponent(hebrewTitle)}`;
+  const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(tvnetilSearchUrl)}`;
 
   const response = await fetch(scraperUrl);
 
@@ -99,10 +98,12 @@ async function scrapeTVNetilTitleFromUrl(targetUrl) {
   const html = await response.text();
   const $ = cheerio.load(html);
 
+  // חילוץ הכותרת מתוך תוצאות החיפוש ב-HTML של TVNetil
   let exactTitle =
     $("h1.entry-title").text() ||
     $(".review-header h1").text() ||
     $(".title-review").text() ||
+    $(".search-result a").first().text() ||
     $("h1").first().text() ||
     $("title").text() ||
     "";
@@ -110,11 +111,11 @@ async function scrapeTVNetilTitleFromUrl(targetUrl) {
   exactTitle = cleanTVNetilTitle(exactTitle);
 
   if (!exactTitle || exactTitle.toLowerCase().includes("just a moment")) {
-    throw new Error("Cloudflare challenge still blocked the request");
+    throw new Error("לא נמצאה כותרת תקינה ב-TVNetil או שהבקשה נחסמה");
   }
 
-  console.log("[שלב 3] הכותרת המדויקת שחולצה מה-HTML:", exactTitle);
-  return exactTitle;
+  console.log("[שלב 2] הכותרת המדויקת שחולצה מ-TVNetil:", exactTitle);
+  return { exactTitle, tvnetilSearchUrl };
 }
 
 /* =========================================================
@@ -217,71 +218,57 @@ async function scrapeFaveToNuvioStreams(faveUrl, exactTitle) {
 }
 
 /* =========================================================
-   MAIN FLOW (4 STAGES)
+   MAIN FLOW
 ========================================================= */
 
 async function resolveTVNetil(hebrewTitle) {
-  // שלב 1: Nuvio מביא את hebrewTitle
+  let exactTitle = "";
+  let tvnetilSearchUrl = "";
 
-  // שלב 2: Serper 1 - מוצא את ה-URL בלבד ב-TVNetil
-  console.log("[שלב 2] Serper 1 מחפש URL ב-TVNetil עבור:", hebrewTitle);
-  const firstData = await serperSearch(`${hebrewTitle} TVNetil`, 20);
-  const organic1 = Array.isArray(firstData?.organic) ? firstData.organic : [];
-
-  const tvnetilItem = organic1.find(item =>
-    String(item.link || "").toLowerCase().includes("tvnetil.net/review/")
-  );
-
-  if (!tvnetilItem || !tvnetilItem.link) {
-    return { success: false, step: "tvnetil-url-not-found", streams: [] };
-  }
-
-  const tvnetilUrl = tvnetilItem.link;
-
-  // שלב 3: ScraperAPI עובר את Cloudflare, נכנס ל-HTML ומחלץ כותרת מדויקת
-  let exactTitleFromHtml = "";
+  // 1+2. פנייה ישירה ל-TVNetil דרך ScraperAPI וחילוץ הכותרת בעברית
   try {
-    exactTitleFromHtml = await scrapeTVNetilTitleFromUrl(tvnetilUrl);
+    const scraped = await searchAndExtractTVNetilTitle(hebrewTitle);
+    exactTitle = scraped.exactTitle;
+    tvnetilSearchUrl = scraped.tvnetilSearchUrl;
   } catch (err) {
     return {
       success: false,
-      step: "tvnetil-html-scrape-failed",
-      tvnetilUrl,
+      step: "tvnetil-scrape-failed",
       error: err.message,
       streams: []
     };
   }
 
-  // שלב 4: Serper 2 - חיפוש ב-Favez0ne עם הכותרת המדויקת שנחלצה מה-HTML
-  console.log("[שלב 4] Serper 2 מחפש עם הכותרת מה-HTML:", exactTitleFromHtml);
-  const faveData = await serperSearch(`site:favez0ne.net "${exactTitleFromHtml}"`, 20);
-  let organic2 = Array.isArray(faveData?.organic) ? faveData.organic : [];
+  // 3. חיפוש ב-Favez0ne עם הכותרת המדויקת באמצעות Serper
+  console.log("[שלב 3] מחפש ב-Favez0ne עבור הכותרת:", exactTitle);
+  const faveData = await serperSearch(`site:favez0ne.net "${exactTitle}"`, 20);
+  let organic = Array.isArray(faveData?.organic) ? faveData.organic : [];
 
-  if (!organic2.length) {
-    const fallbackFave = await serperSearch(`site:favez0ne.net ${exactTitleFromHtml}`, 20);
-    organic2 = Array.isArray(fallbackFave?.organic) ? fallbackFave.organic : [];
+  if (!organic.length) {
+    const fallbackFave = await serperSearch(`site:favez0ne.net ${exactTitle}`, 20);
+    organic = Array.isArray(fallbackFave?.organic) ? fallbackFave.organic : [];
   }
 
-  if (!organic2.length || !organic2[0].link) {
+  if (!organic.length || !organic[0].link) {
     return {
       success: false,
       step: "fave-page-not-found",
-      tvnetilUrl,
-      exactTitleFromHtml,
+      tvnetilSearchUrl,
+      exactTitle,
       streams: []
     };
   }
 
-  const faveUrl = organic2[0].link;
+  const faveUrl = organic[0].link;
 
-  // חילוץ הלינקים מדף ה-Fave והמרתם לפורמט Streams עבור Nuvio
-  const streams = await scrapeFaveToNuvioStreams(faveUrl, exactTitleFromHtml);
+  // 4. חילוץ הסטרימים (PixelDrain / GoFile)
+  const streams = await scrapeFaveToNuvioStreams(faveUrl, exactTitle);
 
   return {
     success: streams.length > 0,
     hebrewTitle,
-    tvnetilUrl,
-    exactTitleFromHtml,
+    tvnetilSearchUrl,
+    exactTitle,
     faveUrl,
     streams
   };
@@ -303,7 +290,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 6.1.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.0.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
