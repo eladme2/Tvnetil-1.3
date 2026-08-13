@@ -4,39 +4,20 @@ import * as cheerio from "cheerio";
 const app = express();
 
 const SERPER_API_KEY = (process.env.SERPER_API_KEY || "").trim();
-const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "7.9.0",
+  version: "8.0.0",
   name: "TVNetil Direct Streams",
-  description: "Fix ScraperAPI Hebrew Double Encoding -> Fave -> Streams",
+  description: "Serper TVNetil Title Scrape -> Fave -> Direct Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
 /* =========================================================
-   TEXT & ENCODING FIXES
+   TEXT UTILS
 ========================================================= */
-
-function fixGarbledHebrew(text) {
-  if (!text) return "";
-  
-  // אם יש תווי replacement בלתי תקינים של UTF-8, מנקים אותם
-  let cleaned = text.replace(/\uFFFD/g, "").replace(/׳Ÿֲ¿ֲ½/g, "").trim();
-  
-  // תיקון Double UTF-8 Encoding נפוץ בעברית
-  try {
-    const bytes = new Uint8Array([...cleaned].map(c => c.charCodeAt(0) & 0xff));
-    const decoded = new TextDecoder("utf-8").decode(bytes);
-    if (/[\u0590-\u05FF]/.test(decoded)) {
-      return decoded;
-    }
-  } catch (e) {}
-
-  return cleaned;
-}
 
 function decodeHtmlEntities(str) {
   return String(str || "")
@@ -50,17 +31,19 @@ function decodeHtmlEntities(str) {
     .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
 }
 
-function cleanTvnetilExactTitle(rawTitle) {
+function cleanTvnetilTitleFromGoogle(rawTitle) {
   if (!rawTitle) return "";
   let title = decodeHtmlEntities(rawTitle).trim();
 
+  // הסרת סיומות אתר נפוצות מגוגל
   title = title
-    .replace(/\s*[-|–—]\s*TVNetil.*$/iu, "")
+    .replace(/\s*[-|–—:]\s*TVNetil.*$/iu, "")
     .replace(/^TVNetil\.net\s*[-|:]\s*/iu, "")
-    .replace(/\s*[-|–—]\s*סרטים.*$/iu, "")
+    .replace(/\s*[-|–—:]\s*סרטים.*$/iu, "")
+    .replace(/\s*[-|–—:]\s*סדרות.*$/iu, "")
     .trim();
 
-  return fixGarbledHebrew(title);
+  return title;
 }
 
 function extractUrlsFromText(text) {
@@ -73,7 +56,7 @@ function extractUrlsFromText(text) {
    SERPER SEARCH
 ========================================================= */
 
-async function serperSearch(query, num = 20) {
+async function serperSearch(query, num = 10) {
   if (!SERPER_API_KEY) throw new Error("SERPER_API_KEY is missing");
 
   const response = await fetch("https://google.serper.dev/search", {
@@ -89,75 +72,31 @@ async function serperSearch(query, num = 20) {
 }
 
 /* =========================================================
-   שלב 1: משיכת עמוד מ-TVNetil
+   שלב 1: מציאת הכותרת המדויקת ב-TVNetil דרך Serper
 ========================================================= */
 
-async function fetchTvnetilHtml(targetUrl) {
-  // הוספת פרמטרים שמכריחים את ScraperAPI לשמור על הקידוד המקורי
-  const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}&keep_headers=true&country_code=il`;
-  
-  const response = await fetch(scraperUrl, {
-    headers: {
-      "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36"
-    }
-  });
+async function getExactTitleFromTvnetilGoogle(hebrewTitle) {
+  console.log("[שלב 1] מחפש את עמוד הסרט ב-TVNetil דרך Serper עבור:", hebrewTitle);
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`ScraperAPI HTTP ${response.status}: ${errText.substring(0, 300)}`);
+  const searchData = await serperSearch(`site:tvnetil.net/review/ "${hebrewTitle}"`, 10);
+  let organic = Array.isArray(searchData?.organic) ? searchData.organic : [];
+
+  if (!organic.length) {
+    const fallbackData = await serperSearch(`site:tvnetil.net "${hebrewTitle}"`, 10);
+    organic = Array.isArray(fallbackData?.organic) ? fallbackData.organic : [];
   }
 
-  return await response.text();
-}
-
-async function getExactTitleFromTvnetilPage(hebrewTitle) {
-  console.log("[שלב 1] מחפש את עמוד הסרט ב-TVNetil עבור:", hebrewTitle);
-
-  if (!SCRAPER_API_KEY) {
-    throw new Error("SCRAPER_API_KEY is missing in environment variables");
+  if (!organic.length || !organic[0].title) {
+    console.log("[שלב 1] לא נמצא עמוד ב-TVNetil, משתמש בשם המקורי:", hebrewTitle);
+    return { exactTitle: hebrewTitle, tvnetilUrl: "" };
   }
 
-  const tvnetilSearchUrl = `https://www.tvnetil.net/index.php?act=search&CODE=01&q=${encodeURIComponent(hebrewTitle)}`;
-  const searchHtml = await fetchTvnetilHtml(tvnetilSearchUrl);
-  const $search = cheerio.load(searchHtml);
+  const rawTitle = organic[0].title;
+  const tvnetilUrl = organic[0].link || "";
+  const exactTitle = cleanTvnetilTitleFromGoogle(rawTitle);
 
-  let reviewUrl = "";
-  $search("a[href*='/review/']").each((_, el) => {
-    const href = $search(el).attr("href");
-    if (href && !reviewUrl) {
-      reviewUrl = href.startsWith("http") ? href : `https://www.tvnetil.net${href.startsWith("/") ? "" : "/"}${href}`;
-    }
-  });
-
-  let rawExtractedTitle = "";
-
-  if (reviewUrl) {
-    console.log("[שלב 1.5] נכנס לעמוד הסרט המקורי ב-TVNetil:", reviewUrl);
-    const moviePageHtml = await fetchTvnetilHtml(reviewUrl);
-    const $movie = cheerio.load(moviePageHtml);
-
-    rawExtractedTitle =
-      $movie("h1.entry-title").text() ||
-      $movie(".review-header h1").text() ||
-      $movie(".title-review").text() ||
-      $movie("h1").first().text() ||
-      $movie("title").text() ||
-      "";
-  } else {
-    rawExtractedTitle = $search("a[href*='/review/']").first().text() || "";
-  }
-
-  let exactTitle = cleanTvnetilExactTitle(rawExtractedTitle);
-
-  // אם הקידוד המקורי נכשל כליל והכותרת ריקה - נשתמש בשם המקורי שחופש
-  if (!exactTitle || exactTitle.length < 2) {
-    console.log("[נסיון החלפה] השם המקורי מעמוד TVNetil נהרס, משתמש בשם החיפוש המקורי:", hebrewTitle);
-    exactTitle = hebrewTitle;
-  }
-
-  console.log("[שלב 2] הכותרת המקורית שהועתקה מעמוד הסרט:", exactTitle);
-  return { exactTitle, tvnetilSearchUrl, reviewUrl };
+  console.log("[שלב 2] הכותרת המדויקת שנמצאה:", exactTitle);
+  return { exactTitle, tvnetilUrl };
 }
 
 /* =========================================================
@@ -265,29 +204,28 @@ async function scrapeFaveToNuvioStreams(faveUrl, exactTitle) {
 
 async function resolveTVNetil(hebrewTitle) {
   let exactTitle = "";
-  let tvnetilSearchUrl = "";
-  let reviewUrl = "";
+  let tvnetilUrl = "";
 
   try {
-    const scraped = await getExactTitleFromTvnetilPage(hebrewTitle);
+    const scraped = await getExactTitleFromTvnetilGoogle(hebrewTitle);
     exactTitle = scraped.exactTitle;
-    tvnetilSearchUrl = scraped.tvnetilSearchUrl;
-    reviewUrl = scraped.reviewUrl;
+    tvnetilUrl = scraped.tvnetilUrl;
   } catch (err) {
     return {
       success: false,
-      step: "tvnetil-scrape-failed",
+      step: "tvnetil-search-failed",
       error: err.message,
       streams: []
     };
   }
 
   console.log("[שלב 3] מחפש ב-Favez0ne עבור הכותרת המקורית:", exactTitle);
-  const faveData = await serperSearch(`site:favez0ne.net "${exactTitle}"`, 20);
+  const faveData = await serperSearch(`site:favez0ne.net "${exactTitle}"`, 10);
   let organic = Array.isArray(faveData?.organic) ? faveData.organic : [];
 
   if (!organic.length) {
-    const fallbackFave = await serperSearch(`site:favez0ne.net ${exactTitle}`, 20);
+    // חיפוש מורחב בלי מרכאות
+    const fallbackFave = await serperSearch(`site:favez0ne.net ${hebrewTitle}`, 10);
     organic = Array.isArray(fallbackFave?.organic) ? fallbackFave.organic : [];
   }
 
@@ -295,8 +233,7 @@ async function resolveTVNetil(hebrewTitle) {
     return {
       success: false,
       step: "fave-page-not-found",
-      tvnetilSearchUrl,
-      reviewUrl,
+      tvnetilUrl,
       exactTitle,
       streams: []
     };
@@ -308,8 +245,7 @@ async function resolveTVNetil(hebrewTitle) {
   return {
     success: streams.length > 0,
     hebrewTitle,
-    tvnetilSearchUrl,
-    reviewUrl,
+    tvnetilUrl,
     exactTitle,
     faveUrl,
     streams
@@ -332,7 +268,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.9.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 8.0.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
