@@ -1,6 +1,9 @@
 {
+  "name": "tvnetil-nuvio-addon",
+  "version": "4.0.0",
   "type": "module",
   "dependencies": {
+    "cheerio": "^1.0.0-rc.12",
     "express": "^5.1.0"
   }
 }
