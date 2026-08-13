@@ -4,19 +4,20 @@ import * as cheerio from "cheerio";
 const app = express();
 
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
+const SCRAPER_API_KEY = process.env.SCRAPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "5.1.0",
+  version: "6.1.0",
   name: "TVNetil Direct Streams",
-  description: "Nuvio -> Serper 1 -> Scrape TVNetil HTML Title via Proxy -> Serper 2 -> Scrape Fave -> Streams",
+  description: "Nuvio -> Serper 1 -> Scrape TVNetil HTML via ScraperAPI Ultra -> Serper 2 -> Fave Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
 /* =========================================================
-   TEXT CLEANING & UTILS
+   TEXT UTILS & CLEANING
 ========================================================= */
 
 function decodeHtml(value) {
@@ -54,7 +55,7 @@ function extractUrlsFromText(text) {
 }
 
 /* =========================================================
-   SERPER SEARCH UTIL
+   SERPER SEARCH
 ========================================================= */
 
 async function serperSearch(query, num = 20) {
@@ -73,29 +74,31 @@ async function serperSearch(query, num = 20) {
 }
 
 /* =========================================================
-   שלב 3: SCRAPER - פתיחת URL של TVNETIL דרך PROXY וחילוץ כותרת מה-HTML
+   שלב 3: SCRAPER API - עקיפת CLOUDFLARE 403 וחילוץ כותרת מה-HTML
 ========================================================= */
 
 async function scrapeTVNetilTitleFromUrl(targetUrl) {
-  console.log("[שלב 3] נכנס ל-URL של TVNetil דרך פרוקסי וקורא את ה-HTML:", targetUrl);
-  
-  const secureUrl = targetUrl.replace(/^http:/i, "https:");
-  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(secureUrl)}`;
+  console.log("[שלב 3] שולח בקשה ל-ScraperAPI מוגבר עבור:", targetUrl);
 
-  const response = await fetch(proxyUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36"
-    }
-  });
+  if (!SCRAPER_API_KEY) {
+    throw new Error("SCRAPER_API_KEY is missing in environment variables");
+  }
+
+  const secureUrl = targetUrl.replace(/^http:/i, "https:");
+
+  // render=true + ultra_premium=true מפעילים Headless Browser ו-Residential IPs לעקיפת Cloudflare 403
+  const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(secureUrl)}&render=true&ultra_premium=true`;
+
+  const response = await fetch(scraperUrl);
 
   if (!response.ok) {
-    throw new Error(`Scraper failed to fetch TVNetil HTML via proxy (HTTP Status: ${response.status})`);
+    const errText = await response.text();
+    throw new Error(`ScraperAPI HTTP ${response.status}: ${errText.substring(0, 300)}`);
   }
 
   const html = await response.text();
   const $ = cheerio.load(html);
 
-  // חילוץ הכותרת המדויקת מתוך ה-HTML של העמוד בלבד
   let exactTitle =
     $("h1.entry-title").text() ||
     $(".review-header h1").text() ||
@@ -106,16 +109,16 @@ async function scrapeTVNetilTitleFromUrl(targetUrl) {
 
   exactTitle = cleanTVNetilTitle(exactTitle);
 
-  if (!exactTitle) {
-    throw new Error("Could not parse movie title from TVNetil HTML structure");
+  if (!exactTitle || exactTitle.toLowerCase().includes("just a moment")) {
+    throw new Error("Cloudflare challenge still blocked the request");
   }
 
-  console.log("[שלב 3] הכותרת המדויקת שחולצה מתוך ה-HTML של TVNetil היא:", exactTitle);
+  console.log("[שלב 3] הכותרת המדויקת שחולצה מה-HTML:", exactTitle);
   return exactTitle;
 }
 
 /* =========================================================
-   חילוץ והמרת הלינקים ל-STREAMS של NUVIO
+   STREAM PARSING FOR NUVIO
 ========================================================= */
 
 function normalizePixelDrainUrl(url) {
@@ -132,7 +135,7 @@ function normalizePixelDrainUrl(url) {
 
     const userMatch = parsed.pathname.match(/^\/u\/([A-Za-z0-9_-]+)\/?$/i);
     if (userMatch) return `https://pixeldrain.com/api/file/${userMatch[1]}`;
-    
+
     const fileMatch = parsed.pathname.match(/^\/l\/([A-Za-z0-9_-]+)\/?$/i);
     if (fileMatch) return `https://pixeldrain.com/api/file/${fileMatch[1]}`;
   } catch {
@@ -214,14 +217,14 @@ async function scrapeFaveToNuvioStreams(faveUrl, exactTitle) {
 }
 
 /* =========================================================
-   הזרימה המלאה והמדויקת לפי 4 השלבים
+   MAIN FLOW (4 STAGES)
 ========================================================= */
 
 async function resolveTVNetil(hebrewTitle) {
-  // שלב 1: Nuvio מספק את hebrewTitle
+  // שלב 1: Nuvio מביא את hebrewTitle
 
-  // שלב 2: Serper ראשון - מציאת ה-URL בלבד ב-TVNetil
-  console.log("[שלב 2] הרצת Serper ראשון למציאת URL של TVNetil עבור:", hebrewTitle);
+  // שלב 2: Serper 1 - מוצא את ה-URL בלבד ב-TVNetil
+  console.log("[שלב 2] Serper 1 מחפש URL ב-TVNetil עבור:", hebrewTitle);
   const firstData = await serperSearch(`${hebrewTitle} TVNetil`, 20);
   const organic1 = Array.isArray(firstData?.organic) ? firstData.organic : [];
 
@@ -235,7 +238,7 @@ async function resolveTVNetil(hebrewTitle) {
 
   const tvnetilUrl = tvnetilItem.link;
 
-  // שלב 3: Scraper נכנס ל-URL (דרך פרוקסי) ומחלץ את הכותרת המדויקת מתוך דף ה-HTML
+  // שלב 3: ScraperAPI Ultra עובר את Cloudflare 403, נכנס ל-HTML ומחלץ כותרת
   let exactTitleFromHtml = "";
   try {
     exactTitleFromHtml = await scrapeTVNetilTitleFromUrl(tvnetilUrl);
@@ -249,8 +252,8 @@ async function resolveTVNetil(hebrewTitle) {
     };
   }
 
-  // שלב 4: Serper שני - חיפוש מתבצע אך ורק עם הכותרת שחולצה מה-HTML בשלב 3
-  console.log("[שלב 4] מריץ Serper שני עם הכותרת המדויקת שנשאבה מדף TVNetil:", exactTitleFromHtml);
+  // שלב 4: Serper 2 - חיפוש ב-Favez0ne עם הכותרת המדויקת שנחלצה מה-HTML
+  console.log("[שלב 4] Serper 2 מחפש עם הכותרת מה-HTML:", exactTitleFromHtml);
   const faveData = await serperSearch(`site:favez0ne.net "${exactTitleFromHtml}"`, 20);
   let organic2 = Array.isArray(faveData?.organic) ? faveData.organic : [];
 
@@ -271,7 +274,7 @@ async function resolveTVNetil(hebrewTitle) {
 
   const faveUrl = organic2[0].link;
 
-  // חילוץ הקישורים מדף ה-Fave והצגתם בפורמט Nuvio Streams
+  // חילוץ הלינקים מדף ה-Fave והמרתם לפורמט Streams עבור Nuvio
   const streams = await scrapeFaveToNuvioStreams(faveUrl, exactTitleFromHtml);
 
   return {
@@ -300,7 +303,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 5.1.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 6.1.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
