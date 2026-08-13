@@ -8,9 +8,9 @@ const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "7.6.0",
+  version: "7.7.0",
   name: "TVNetil Direct Streams",
-  description: "Exact Unmodified Hebrew Title Scraping via Native Windows-1255 Buffer",
+  description: "Exact Title Scraping via ScraperAPI UTF8 -> Fave -> Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -72,10 +72,10 @@ async function serperSearch(query, num = 20) {
 }
 
 /* =========================================================
-   שלב 1: משיכת עמוד הסרט מ-TVNetil כ-Buffer ופענוח עברית מדויק
+   שלב 1: משיכת עמוד הסרט מ-TVNetil 
 ========================================================= */
 
-async function fetchTvnetilHtmlWithCorrectEncoding(targetUrl) {
+async function fetchTvnetilHtml(targetUrl) {
   const scraperUrl = `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}`;
   const response = await fetch(scraperUrl);
 
@@ -84,16 +84,7 @@ async function fetchTvnetilHtmlWithCorrectEncoding(targetUrl) {
     throw new Error(`ScraperAPI HTTP ${response.status}: ${errText.substring(0, 300)}`);
   }
 
-  // קריאת המידע הגולמי כ-ArrayBuffer כדי לא להרוס את הקידוד העברי
-  const buffer = await response.arrayBuffer();
-  
-  try {
-    const decoder = new TextDecoder("windows-1255");
-    return decoder.decode(buffer);
-  } catch {
-    const decoder = new TextDecoder("utf-8");
-    return decoder.decode(buffer);
-  }
+  return await response.text();
 }
 
 async function getExactTitleFromTvnetilPage(hebrewTitle) {
@@ -105,7 +96,7 @@ async function getExactTitleFromTvnetilPage(hebrewTitle) {
 
   // 1. פנייה לדף החיפוש ב-TVNetil
   const tvnetilSearchUrl = `https://www.tvnetil.net/index.php?act=search&CODE=01&q=${encodeURIComponent(hebrewTitle)}`;
-  const searchHtml = await fetchTvnetilHtmlWithCorrectEncoding(tvnetilSearchUrl);
+  const searchHtml = await fetchTvnetilHtml(tvnetilSearchUrl);
   const $search = cheerio.load(searchHtml);
 
   // 2. איתור הקישור הישיר לעמוד הסרט/הסיקור (/review/)
@@ -119,10 +110,10 @@ async function getExactTitleFromTvnetilPage(hebrewTitle) {
 
   let rawExtractedTitle = "";
 
-  // 3. אם נמצא עמוד סרט - נכנסים אליו ומעתיקים את הכותרת המקורית בדיוק כפי שהיא!
+  // 3. כניסה לעמוד הסרט המקורי והעתקת הכותרת המדויקת
   if (reviewUrl) {
     console.log("[שלב 1.5] נכנס לעמוד הסרט המקורי ב-TVNetil:", reviewUrl);
-    const moviePageHtml = await fetchTvnetilHtmlWithCorrectEncoding(reviewUrl);
+    const moviePageHtml = await fetchTvnetilHtml(reviewUrl);
     const $movie = cheerio.load(moviePageHtml);
 
     rawExtractedTitle =
@@ -133,7 +124,6 @@ async function getExactTitleFromTvnetilPage(hebrewTitle) {
       $movie("title").text() ||
       "";
   } else {
-    // גיבוי מעמוד החיפוש
     rawExtractedTitle = $search("a[href*='/review/']").first().text() || "";
   }
 
@@ -319,7 +309,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.6.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.7.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
