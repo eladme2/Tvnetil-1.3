@@ -6,10 +6,10 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "3.6.0",
+  version: "3.7.0",
   name: "TVNetil Direct Streams",
   description:
-    "Hebrew title -> TVNetil result title -> PixelDrain / GoFile streams",
+    "Nuvio Hebrew title -> TVNetil title -> file-host search",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -178,8 +178,7 @@ function getHebrewTitle(req, metadata) {
 }
 
 /* =========================================================
-   STEP 1
-   HEBREW TITLE -> TVNETIL
+   TVNETIL SEARCH
 ========================================================= */
 
 async function searchTVNetil(hebrewTitle) {
@@ -205,7 +204,7 @@ async function searchTVNetil(hebrewTitle) {
       ? data.organic
       : [];
 
-  const allSearchResults =
+  const allResults =
     organic.map(item => ({
       title: item?.title || null,
       link: item?.link || null,
@@ -214,26 +213,22 @@ async function searchTVNetil(hebrewTitle) {
       position: item?.position || null
     }));
 
-  const results =
-    allSearchResults.filter(item => {
-      const link =
-        String(item.link || "").toLowerCase();
-
-      return link.includes(
-        "tvnetil.net/review/"
-      );
-    });
+  const tvnetilResults =
+    allResults.filter(item =>
+      String(item.link || "")
+        .toLowerCase()
+        .includes("tvnetil.net/review/")
+    );
 
   return {
     query,
-    resultCount: results.length,
-    results,
-    allSearchResults
+    resultCount: tvnetilResults.length,
+    results: tvnetilResults,
+    allSearchResults: allResults
   };
 }
 
 /* =========================================================
-   STEP 2
    CHOOSE TVNETIL RESULT
 ========================================================= */
 
@@ -253,44 +248,22 @@ function chooseTVNetilResult(
   let bestScore = -1;
 
   for (const item of results) {
-    const titleText =
-      normalize(item.title || "");
-
-    const snippetText =
-      normalize(item.snippet || "");
-
     const text =
-      `${titleText} ${snippetText}`;
+      normalize(
+        `${item.title || ""} ${item.snippet || ""}`
+      );
 
     let score = 0;
 
-    /*
-     * עדיפות גבוהה מאוד לכותרת התוצאה עצמה.
-     */
-
-    if (
-      titleText.includes(wanted)
-    ) {
-      score += 500;
-    }
-
-    if (
-      text.includes(wanted)
-    ) {
+    if (text.includes(wanted)) {
       score += 300;
     }
 
     for (const word of words) {
-      if (titleText.includes(word)) {
-        score += 40;
-      } else if (snippetText.includes(word)) {
-        score += 15;
+      if (text.includes(word)) {
+        score += 20;
       }
     }
-
-    /*
-     * TVNetil תמיד צריך להיות קשור לשם שחיפשנו.
-     */
 
     if (
       words.length > 0 &&
@@ -302,28 +275,23 @@ function chooseTVNetilResult(
     }
 
     /*
-     * תוצאה עם /review/ID/ID עדיפה על עמוד כללי.
+     * תוצאה שמכילה שנה + מדובב
+     * עדיפה כאשר קיימת.
      */
-
     if (
-      /\/review\/\d+\/\d+/i.test(
-        String(item.link || "")
+      /\(\d{4}\)/u.test(
+        item.title || ""
       )
     ) {
       score += 100;
     }
 
-    /*
-     * מדובב הוא בדרך כלל התוכן שאנחנו רוצים
-     * כאשר התוצאה של TVNetil מציינת אותו.
-     */
-
     if (
-      /מדובב/i.test(
-        String(item.title || "")
+      /מדובב/iu.test(
+        item.title || ""
       )
     ) {
-      score += 50;
+      score += 100;
     }
 
     if (score > bestScore) {
@@ -340,8 +308,7 @@ function chooseTVNetilResult(
 }
 
 /* =========================================================
-   STEP 3
-   TVNETIL RESULT TITLE
+   GET EXACT TVNETIL TITLE
 ========================================================= */
 
 function getTVNetilTitle(selected) {
@@ -351,130 +318,149 @@ function getTVNetilTitle(selected) {
 
   /*
    * חשוב:
-   * אנחנו לוקחים את title של תוצאת Google
-   * של TVNetil.
+   * אנחנו משתמשים בכותרת של תוצאת TVNetil עצמה.
    *
-   * לא מנסים לפתוח את הדף עצמו,
-   * כי TVNetil מחזיר Cloudflare 403.
+   * לדוגמה:
+   * בלאגן ביער (2025) - מדובב
+   *
+   * לא חוזרים ל-Cinemeta ולא משתמשים
+   * בשם האנגלי.
    */
 
-  let title =
-    cleanText(
-      selected.title || ""
-    );
+  const title =
+    cleanText(selected.title || "");
 
-  /*
-   * הסרת שם האתר בלבד אם Google הוסיף אותו.
-   */
-
-  title =
-    title
-      .replace(
-        /\s*[-|–—]\s*TVNetil\.net.*$/iu,
-        ""
-      )
-      .replace(
-        /^TVNetil\.net\s*[-|–—]\s*/iu,
-        ""
-      )
-      .trim();
-
-  return title || null;
-}
-
-/* =========================================================
-   PIXELDRAIN URL NORMALIZATION
-========================================================= */
-
-function normalizePixelDrainUrl(link) {
-  const value =
-    String(link || "").trim();
-
-  if (!value) {
+  if (!title) {
     return null;
   }
 
-  try {
-    const url =
-      new URL(value);
-
-    const host =
-      url.hostname.toLowerCase();
-
-    if (
-      !host.includes("pixeldrain.com")
-    ) {
-      return null;
-    }
-
-    /*
-     * /api/file/ID
-     */
-
-    const apiMatch =
-      url.pathname.match(
-        /\/api\/file\/([^/?#]+)/i
-      );
-
-    if (apiMatch?.[1]) {
-      return (
-        `https://pixeldrain.com/api/file/${apiMatch[1]}`
-      );
-    }
-
-    /*
-     * /u/ID
-     */
-
-    const userMatch =
-      url.pathname.match(
-        /\/u\/([^/?#]+)/i
-      );
-
-    if (userMatch?.[1]) {
-      return (
-        `https://pixeldrain.com/api/file/${userMatch[1]}`
-      );
-    }
-
-    /*
-     * /l/ID
-     *
-     * זה קישור לתיקייה/רשימה.
-     * לא ממירים אותו ל-api/file כי אין
-     * ודאות שהוא File ID.
-     */
-
-    const listMatch =
-      url.pathname.match(
-        /\/l\/([^/?#]+)/i
-      );
-
-    if (listMatch?.[1]) {
-      return (
-        `https://pixeldrain.com/l/${listMatch[1]}`
-      );
-    }
-
-    return value;
-
-  } catch {
-    return value;
-  }
+  return title;
 }
 
 /* =========================================================
-   PIXELDRAIN IDENTIFICATION
+   GENERIC SERPER RESULTS
 ========================================================= */
 
-function isPixelDrainUrl(link) {
-  return /pixeldrain\.com/i.test(
-    String(link || "")
-  );
+function mapOrganicResults(data) {
+  const organic =
+    Array.isArray(data?.organic)
+      ? data.organic
+      : [];
+
+  return organic.map(item => ({
+    title: item?.title || null,
+    link: item?.link || null,
+    snippet: item?.snippet || null,
+    date: item?.date || null,
+    position: item?.position || null,
+    query: item?.query || null
+  }));
 }
 
 /* =========================================================
-   STEP 4
+   PIXELDRAIN URL VALIDATION
+========================================================= */
+
+function isRealPixelDrainUrl(url) {
+  const value =
+    String(url || "")
+      .trim()
+      .toLowerCase();
+
+  if (!value) {
+    return false;
+  }
+
+  /*
+   * דף הבית אינו קובץ.
+   */
+  if (
+    value === "https://pixeldrain.com/" ||
+    value === "http://pixeldrain.com/" ||
+    value === "https://www.pixeldrain.com/" ||
+    value === "http://www.pixeldrain.com/"
+  ) {
+    return false;
+  }
+
+  /*
+   * קישור קובץ רגיל.
+   */
+  if (
+    /pixeldrain\.com\/u\/[^/?#]+/i.test(url)
+  ) {
+    return true;
+  }
+
+  /*
+   * קישור רשימה.
+   */
+  if (
+    /pixeldrain\.com\/l\/[^/?#]+/i.test(url)
+  ) {
+    return true;
+  }
+
+  /*
+   * API של קובץ.
+   */
+  if (
+    /pixeldrain\.com\/api\/file\/[^/?#]+/i.test(url)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/* =========================================================
+   PIXELDRAIN NORMALIZATION
+========================================================= */
+
+function normalizePixelDrainUrl(url) {
+  const value =
+    String(url || "").trim();
+
+  if (!isRealPixelDrainUrl(value)) {
+    return null;
+  }
+
+  /*
+   * אם זה כבר API:
+   */
+  if (
+    /pixeldrain\.com\/api\/file\//i.test(value)
+  ) {
+    return value;
+  }
+
+  /*
+   * /u/ID
+   */
+  const match =
+    value.match(
+      /pixeldrain\.com\/u\/([^/?#]+)/i
+    );
+
+  if (match?.[1]) {
+    return `https://pixeldrain.com/api/file/${match[1]}`;
+  }
+
+  /*
+   * /l/ID הוא Playlist/List,
+   * ולכן לא נהפוך אותו באופן שגוי
+   * ל-api/file.
+   */
+  if (
+    /pixeldrain\.com\/l\//i.test(value)
+  ) {
+    return value;
+  }
+
+  return value;
+}
+
+/* =========================================================
    PIXELDRAIN SEARCH
 ========================================================= */
 
@@ -488,18 +474,13 @@ async function searchPixelDrain(tvnetilTitle) {
   }
 
   /*
-   * אין מרכאות!
-   *
-   * Serper בחשבון החינמי מחזיר:
-   * Query pattern not allowed
-   * עבור חלק מהחיפושים עם quotes.
+   * חשוב:
+   * השם מגיע ישירות מתוצאת TVNetil.
    */
-
   const queries = [
-    `site:pixeldrain.com ${tvnetilTitle}`,
-    `${tvnetilTitle} pixeldrain`,
-    `${tvnetilTitle} PixelDrain`,
-    `${tvnetilTitle} pixeldrain.com`,
+    `site:pixeldrain.com "${tvnetilTitle}"`,
+    `"${tvnetilTitle}" pixeldrain`,
+    `"${tvnetilTitle}" "pixeldrain.com"`,
     `${tvnetilTitle} pixeldrain.com/u`,
     `${tvnetilTitle} pixeldrain.com/l`,
     `${tvnetilTitle} pixeldrain.com/api/file`
@@ -511,71 +492,52 @@ async function searchPixelDrain(tvnetilTitle) {
   for (const query of queries) {
     try {
       const data =
-        await serperSearch(
-          query,
-          20
-        );
+        await serperSearch(query, 20);
 
-      const organic =
-        Array.isArray(data?.organic)
-          ? data.organic
-          : [];
+      const results =
+        mapOrganicResults(data);
 
-      for (const item of organic) {
-        const result = {
-          title:
-            item?.title || null,
+      for (const item of results) {
+        const originalUrl =
+          String(item.link || "").trim();
 
-          link:
-            item?.link || null,
-
-          snippet:
-            item?.snippet || null,
-
-          date:
-            item?.date || null,
-
-          position:
-            item?.position || null,
-
-          query
-        };
-
-        const link =
-          String(
-            result.link || ""
-          ).trim();
-
-        if (!link) {
-          continue;
-        }
-
+        /*
+         * חובה שיהיה קישור PixelDrain אמיתי.
+         */
         if (
-          !isPixelDrainUrl(link)
+          !isRealPixelDrainUrl(
+            originalUrl
+          )
         ) {
-          continue;
-        }
-
-        const finalUrl =
-          normalizePixelDrainUrl(
-            link
+          console.log(
+            "IGNORED PIXELDRAIN RESULT:",
+            originalUrl
           );
 
-        if (!finalUrl) {
+          continue;
+        }
+
+        const normalizedUrl =
+          normalizePixelDrainUrl(
+            originalUrl
+          );
+
+        if (!normalizedUrl) {
           continue;
         }
 
         if (
-          seen.has(finalUrl)
+          seen.has(normalizedUrl)
         ) {
           continue;
         }
 
-        seen.add(finalUrl);
+        seen.add(normalizedUrl);
 
         collected.push({
-          ...result,
-          normalizedUrl: finalUrl
+          ...item,
+          originalUrl,
+          normalizedUrl
         });
       }
 
@@ -590,17 +552,25 @@ async function searchPixelDrain(tvnetilTitle) {
 
   return {
     queries,
-    resultCount:
-      collected.length,
-    results:
-      collected
+    resultCount: collected.length,
+    results: collected
   };
 }
 
 /* =========================================================
-   STEP 5
    GOFILE SEARCH
 ========================================================= */
+
+function isRealGoFileUrl(url) {
+  const value =
+    String(url || "").trim();
+
+  return (
+    /^https?:\/\/(?:www\.)?gofile\.io\/d\/[^/?#]+/i.test(
+      value
+    )
+  );
+}
 
 async function searchGoFile(tvnetilTitle) {
   if (!tvnetilTitle) {
@@ -612,9 +582,9 @@ async function searchGoFile(tvnetilTitle) {
   }
 
   const queries = [
-    `site:gofile.io ${tvnetilTitle}`,
-    `${tvnetilTitle} GoFile`,
-    `${tvnetilTitle} gofile.io`,
+    `site:gofile.io "${tvnetilTitle}"`,
+    `"${tvnetilTitle}" GoFile`,
+    `"${tvnetilTitle}" "gofile.io"`,
     `${tvnetilTitle} gofile.io/d`
   ];
 
@@ -624,47 +594,17 @@ async function searchGoFile(tvnetilTitle) {
   for (const query of queries) {
     try {
       const data =
-        await serperSearch(
-          query,
-          20
-        );
+        await serperSearch(query, 20);
 
-      const organic =
-        Array.isArray(data?.organic)
-          ? data.organic
-          : [];
+      const results =
+        mapOrganicResults(data);
 
-      for (const item of organic) {
-        const result = {
-          title:
-            item?.title || null,
-
-          link:
-            item?.link || null,
-
-          snippet:
-            item?.snippet || null,
-
-          date:
-            item?.date || null,
-
-          position:
-            item?.position || null,
-
-          query
-        };
-
+      for (const item of results) {
         const link =
-          String(
-            result.link || ""
-          ).trim();
-
-        if (!link) {
-          continue;
-        }
+          String(item.link || "").trim();
 
         if (
-          !/gofile\.io/i.test(link)
+          !isRealGoFileUrl(link)
         ) {
           continue;
         }
@@ -677,9 +617,7 @@ async function searchGoFile(tvnetilTitle) {
 
         seen.add(link);
 
-        collected.push(
-          result
-        );
+        collected.push(item);
       }
 
     } catch (error) {
@@ -693,16 +631,13 @@ async function searchGoFile(tvnetilTitle) {
 
   return {
     queries,
-    resultCount:
-      collected.length,
-    results:
-      collected
+    resultCount: collected.length,
+    results: collected
   };
 }
 
 /* =========================================================
-   STEP 6
-   EXTRACT STREAMS
+   STREAMS
 ========================================================= */
 
 function extractStreams(
@@ -712,18 +647,18 @@ function extractStreams(
   const streams = [];
   const seen = new Set();
 
-  /* -------------------------------------------------------
-     PixelDrain
-  ------------------------------------------------------- */
-
+  /*
+   * PixelDrain
+   */
   for (
     const item of
     pixelDrainSearch?.results || []
   ) {
     const url =
+      item.normalizedUrl ||
       normalizePixelDrainUrl(
-        item?.normalizedUrl ||
-        item?.link
+        item.originalUrl ||
+        item.link
       );
 
     if (!url) {
@@ -739,41 +674,29 @@ function extractStreams(
     seen.add(url);
 
     streams.push({
-      name:
-        "PixelDrain",
-
+      name: "PixelDrain",
       title:
         cleanText(
-          item?.title ||
+          item.title ||
           "PixelDrain"
         ),
-
       url,
-
-      type:
-        "http"
+      type: "http"
     });
   }
 
-  /* -------------------------------------------------------
-     GoFile
-  ------------------------------------------------------- */
-
+  /*
+   * GoFile
+   */
   for (
     const item of
     goFileSearch?.results || []
   ) {
     const url =
-      String(
-        item?.link || ""
-      ).trim();
-
-    if (!url) {
-      continue;
-    }
+      String(item.link || "").trim();
 
     if (
-      !/gofile\.io/i.test(url)
+      !isRealGoFileUrl(url)
     ) {
       continue;
     }
@@ -787,19 +710,14 @@ function extractStreams(
     seen.add(url);
 
     streams.push({
-      name:
-        "GoFile",
-
+      name: "GoFile",
       title:
         cleanText(
-          item?.title ||
+          item.title ||
           "GoFile"
         ),
-
       url,
-
-      type:
-        "http"
+      type: "http"
     });
   }
 
@@ -815,15 +733,12 @@ async function resolveTVNetil(
 ) {
   console.log("======================================");
   console.log("FLOW START");
-  console.log(
-    "HEBREW TITLE:",
-    hebrewTitle
-  );
+  console.log("HEBREW TITLE:", hebrewTitle);
 
-  /* -------------------------------------------------------
-     1. Hebrew title -> TVNetil
-  ------------------------------------------------------- */
-
+  /*
+   * 1.
+   * עברית -> TVNetil
+   */
   const firstSearch =
     await searchTVNetil(
       hebrewTitle
@@ -834,18 +749,17 @@ async function resolveTVNetil(
   ) {
     return {
       success: false,
-      step:
-        "tvnetil-search",
+      step: "tvnetil-search",
       hebrewTitle,
       firstSearch,
       streams: []
     };
   }
 
-  /* -------------------------------------------------------
-     2. Select TVNetil result
-  ------------------------------------------------------- */
-
+  /*
+   * 2.
+   * בחירת תוצאת TVNetil
+   */
   const selected =
     chooseTVNetilResult(
       firstSearch.results,
@@ -855,19 +769,17 @@ async function resolveTVNetil(
   if (!selected) {
     return {
       success: false,
-      step:
-        "tvnetil-selection",
+      step: "tvnetil-selection",
       hebrewTitle,
       firstSearch,
       streams: []
     };
   }
 
-  /* -------------------------------------------------------
-     3. IMPORTANT:
-        Take the title from the TVNetil search result
-  ------------------------------------------------------- */
-
+  /*
+   * 3.
+   * שם הסרט המדויק מתוצאת TVNetil
+   */
   const tvnetilTitle =
     getTVNetilTitle(
       selected
@@ -876,52 +788,41 @@ async function resolveTVNetil(
   if (!tvnetilTitle) {
     return {
       success: false,
-      step:
-        "tvnetil-result-title",
+      step: "tvnetil-result-title",
       hebrewTitle,
       firstSearch,
-      tvnetilResult:
-        selected,
+      tvnetilResult: selected,
       streams: []
     };
   }
 
   console.log(
-    "======================================"
-  );
-
-  console.log(
-    "TVNETIL RESULT:",
-    selected.title
-  );
-
-  console.log(
-    "TVNETIL SEARCH TITLE:",
+    "EXACT TVNETIL TITLE:",
     tvnetilTitle
   );
 
-  /* -------------------------------------------------------
-     4. PixelDrain
-  ------------------------------------------------------- */
-
+  /*
+   * 4.
+   * PixelDrain
+   */
   const pixelDrainSearch =
     await searchPixelDrain(
       tvnetilTitle
     );
 
-  /* -------------------------------------------------------
-     5. GoFile
-  ------------------------------------------------------- */
-
+  /*
+   * 5.
+   * GoFile
+   */
   const goFileSearch =
     await searchGoFile(
       tvnetilTitle
     );
 
-  /* -------------------------------------------------------
-     6. Build streams
-  ------------------------------------------------------- */
-
+  /*
+   * 6.
+   * Streams
+   */
   const streams =
     extractStreams(
       pixelDrainSearch,
@@ -929,21 +830,17 @@ async function resolveTVNetil(
     );
 
   console.log(
-    "======================================"
-  );
-
-  console.log(
-    "PIXELDRAIN RESULTS:",
+    "PIXELDRAIN REAL FILES:",
     pixelDrainSearch.resultCount
   );
 
   console.log(
-    "GOFILE RESULTS:",
+    "GOFILE REAL FILES:",
     goFileSearch.resultCount
   );
 
   console.log(
-    "FINAL STREAMS:",
+    "STREAMS:",
     streams.length
   );
 
@@ -963,6 +860,9 @@ async function resolveTVNetil(
     tvnetilResult:
       selected,
 
+    /*
+     * זה השם שישמש לחיפוש הקבצים.
+     */
     tvnetilTitle,
 
     pixelDrainSearch,
@@ -996,10 +896,8 @@ app.get(
     if (!hasHebrew(title)) {
       return res.json({
         success: false,
-        step:
-          "hebrew-title",
-        inputTitle:
-          title,
+        step: "hebrew-title",
+        inputTitle: title,
         message:
           "No Hebrew title. English search is disabled.",
         streams: []
@@ -1007,15 +905,9 @@ app.get(
     }
 
     try {
-      const result =
-        await resolveTVNetil(
-          title
-        );
-
       return res.json(
-        result
+        await resolveTVNetil(title)
       );
-
     } catch (error) {
       console.error(
         error.stack ||
@@ -1024,8 +916,7 @@ app.get(
 
       return res.status(500).json({
         success: false,
-        error:
-          error.message,
+        error: error.message,
         streams: []
       });
     }
@@ -1056,10 +947,10 @@ app.get(
     }
 
     try {
-      /* ---------------------------------------------------
-         Cinemeta
-      --------------------------------------------------- */
-
+      /*
+       * Cinemeta משמש רק כדי לקבל את
+       * השם העברי אם Nuvio לא שולח title.
+       */
       const metadata =
         await getMetadata(
           type,
@@ -1073,10 +964,6 @@ app.get(
           ""
         );
 
-      /* ---------------------------------------------------
-         Hebrew title
-      --------------------------------------------------- */
-
       const hebrewTitle =
         getHebrewTitle(
           req,
@@ -1086,23 +973,16 @@ app.get(
       if (!hebrewTitle) {
         return res.json({
           streams: [],
-
           tvnetil: {
             success: false,
-            imdbId:
-              id,
+            imdbId: id,
             metadataTitle,
-            step:
-              "hebrew-title",
+            step: "hebrew-title",
             message:
               "No Hebrew title available. English search is disabled."
           }
         });
       }
-
-      /* ---------------------------------------------------
-         Full flow
-      --------------------------------------------------- */
 
       const result =
         await resolveTVNetil(
@@ -1115,8 +995,7 @@ app.get(
 
         tvnetil: {
           ...result,
-          imdbId:
-            id,
+          imdbId: id,
           metadataTitle
         }
       });
@@ -1129,15 +1008,11 @@ app.get(
 
       return res.json({
         streams: [],
-
         tvnetil: {
           success: false,
-          imdbId:
-            id,
-          metadataTitle:
-            null,
-          error:
-            error.message
+          imdbId: id,
+          metadataTitle: null,
+          error: error.message
         }
       });
     }
@@ -1151,9 +1026,7 @@ app.get(
 app.get(
   "/manifest.json",
   (_, res) => {
-    res.json(
-      MANIFEST
-    );
+    res.json(MANIFEST);
   }
 );
 
@@ -1165,7 +1038,7 @@ app.get(
   "/",
   (_, res) => {
     res.send(
-      "TVNetil Direct Streams 3.6.0"
+      "TVNetil Direct Streams 3.7.0"
     );
   }
 );
@@ -1178,7 +1051,7 @@ app.listen(
   process.env.PORT || 3000,
   () => {
     console.log(
-      "TVNetil Direct Streams 3.6.0 started"
+      "TVNetil Direct Streams 3.7.0 started"
     );
   }
 );
