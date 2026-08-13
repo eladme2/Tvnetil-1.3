@@ -8,16 +8,16 @@ const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "7.1.0",
+  version: "7.3.0",
   name: "TVNetil Direct Streams",
-  description: "Direct TVNetil Search via ScraperAPI with Windows-1255 Encoding Fix -> Fave -> Streams",
+  description: "Native TextDecoder Hebrew Fix -> Fave -> Direct Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
 /* =========================================================
-   TEXT UTILS & ENCODING FIX
+   TEXT UTILS & CLEANING
 ========================================================= */
 
 function decodeHtml(value) {
@@ -75,7 +75,7 @@ async function serperSearch(query, num = 20) {
 }
 
 /* =========================================================
-   שלב 1+2: פנייה ישירה ל-TVNetil דרך ScraperAPI + פענוח עברית (Windows-1255)
+   שלב 1+2: פנייה ישירה ל-TVNetil + פענוח עברית טבעי
 ========================================================= */
 
 async function searchAndExtractTVNetilTitle(hebrewTitle) {
@@ -95,15 +95,16 @@ async function searchAndExtractTVNetilTitle(hebrewTitle) {
     throw new Error(`ScraperAPI HTTP ${response.status}: ${errText.substring(0, 300)}`);
   }
 
-  // פתרון בעיית הקידוד: קריאת הבייטים ופענוח עברית לפי Windows-1255
-  const buffer = await response.arrayBuffer();
+  // פענוח עברית מובנה בעזרת TextDecoder Native
+  const arrayBuffer = await response.arrayBuffer();
   let html = "";
+  
   try {
-    const decoder = new TextDecoder("windows-1255");
-    html = decoder.decode(buffer);
+    const win1255Decoder = new TextDecoder("windows-1255");
+    html = win1255Decoder.decode(arrayBuffer);
   } catch {
-    const fallbackDecoder = new TextDecoder("utf-8");
-    html = fallbackDecoder.decode(buffer);
+    const utf8Decoder = new TextDecoder("utf-8");
+    html = utf8Decoder.decode(arrayBuffer);
   }
 
   const $ = cheerio.load(html);
@@ -119,14 +120,6 @@ async function searchAndExtractTVNetilTitle(hebrewTitle) {
     "";
 
   exactTitle = cleanTVNetilTitle(exactTitle);
-
-  if (!exactTitle || exactTitle.includes("") || exactTitle.toLowerCase().includes("just a moment")) {
-    // אם המנוע הפנימי לא החזיר כותרת נקייה, ננסה לחלץ בעזרת ביטוי רגולרי מה-HTML
-    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-    if (titleMatch && titleMatch[1]) {
-      exactTitle = cleanTVNetilTitle(titleMatch[1]);
-    }
-  }
 
   console.log("[שלב 2] הכותרת המדויקת שחולצה מ-TVNetil:", exactTitle);
   return { exactTitle, tvnetilSearchUrl };
@@ -300,7 +293,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.1.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 7.3.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
