@@ -7,9 +7,9 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "5.0.0",
+  version: "5.1.0",
   name: "TVNetil Direct Streams",
-  description: "Nuvio -> Serper 1 -> Scrape TVNetil Page HTML Title -> Serper 2 -> Scrape Fave -> Streams",
+  description: "Nuvio -> Serper 1 -> Scrape TVNetil HTML Title via Proxy -> Serper 2 -> Scrape Fave -> Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -73,35 +73,29 @@ async function serperSearch(query, num = 20) {
 }
 
 /* =========================================================
-   שלב 3: SCRAPER - פתיחת URL של TVNETIL וחילוץ כותרת מה-HTML
+   שלב 3: SCRAPER - פתיחת URL של TVNETIL דרך PROXY וחילוץ כותרת מה-HTML
 ========================================================= */
 
 async function scrapeTVNetilTitleFromUrl(targetUrl) {
-  console.log("[שלב 3] נכנס ל-URL של TVNetil וקורא את ה-HTML:", targetUrl);
+  console.log("[שלב 3] נכנס ל-URL של TVNetil דרך פרוקסי וקורא את ה-HTML:", targetUrl);
   
   const secureUrl = targetUrl.replace(/^http:/i, "https:");
+  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(secureUrl)}`;
 
-  // כותרות מלאות המחכות דפדפן אמיתי לחלוטין כדי לעקוף חסימת 403
-  const response = await fetch(secureUrl, {
-    method: "GET",
+  const response = await fetch(proxyUrl, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-      "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-      "Cache-Control": "no-cache",
-      "Pragma": "no-cache",
-      "Upgrade-Insecure-Requests": "1"
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36"
     }
   });
 
   if (!response.ok) {
-    throw new Error(`Scraper failed to fetch TVNetil HTML (HTTP Status: ${response.status})`);
+    throw new Error(`Scraper failed to fetch TVNetil HTML via proxy (HTTP Status: ${response.status})`);
   }
 
   const html = await response.text();
   const $ = cheerio.load(html);
 
-  // חילוץ הכותרת המדויקת מתוך תגיות ה-HTML של העמוד בלבד
+  // חילוץ הכותרת המדויקת מתוך ה-HTML של העמוד בלבד
   let exactTitle =
     $("h1.entry-title").text() ||
     $(".review-header h1").text() ||
@@ -165,7 +159,7 @@ function normalizeGoFileUrl(url) {
 }
 
 async function scrapeFaveToNuvioStreams(faveUrl, exactTitle) {
-  console.log("[שלב 4] סורק את עמוד ה-Fave שנמצא לקבלת קישורי צפייה:", faveUrl);
+  console.log("[שלב 4] סורק את עמוד ה-Fave לקבלת קישורי צפייה:", faveUrl);
   const streams = [];
   const seenUrls = new Set();
 
@@ -224,7 +218,7 @@ async function scrapeFaveToNuvioStreams(faveUrl, exactTitle) {
 ========================================================= */
 
 async function resolveTVNetil(hebrewTitle) {
-  // שלב 1: Nuvio מספק את hebrewTitle (לדוגמה: "בלאגן ביער")
+  // שלב 1: Nuvio מספק את hebrewTitle
 
   // שלב 2: Serper ראשון - מציאת ה-URL בלבד ב-TVNetil
   console.log("[שלב 2] הרצת Serper ראשון למציאת URL של TVNetil עבור:", hebrewTitle);
@@ -241,7 +235,7 @@ async function resolveTVNetil(hebrewTitle) {
 
   const tvnetilUrl = tvnetilItem.link;
 
-  // שלב 3: Scraper נכנס ל-selected.link ומחלץ את הכותרת המדויקת מתוך דף ה-HTML
+  // שלב 3: Scraper נכנס ל-URL (דרך פרוקסי) ומחלץ את הכותרת המדויקת מתוך דף ה-HTML
   let exactTitleFromHtml = "";
   try {
     exactTitleFromHtml = await scrapeTVNetilTitleFromUrl(tvnetilUrl);
@@ -261,7 +255,6 @@ async function resolveTVNetil(hebrewTitle) {
   let organic2 = Array.isArray(faveData?.organic) ? faveData.organic : [];
 
   if (!organic2.length) {
-    // במידה והחיפוש הקשיח לא החזיר תוצאה, מנסים ללא מרכאות עבור אותה כותרת שחולצה
     const fallbackFave = await serperSearch(`site:favez0ne.net ${exactTitleFromHtml}`, 20);
     organic2 = Array.isArray(fallbackFave?.organic) ? fallbackFave.organic : [];
   }
@@ -285,7 +278,7 @@ async function resolveTVNetil(hebrewTitle) {
     success: streams.length > 0,
     hebrewTitle,
     tvnetilUrl,
-    exactTitleFromHtml, // הכותרת מתוך ה-HTML מדף TVNetil
+    exactTitleFromHtml,
     faveUrl,
     streams
   };
@@ -307,7 +300,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 5.0.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 5.1.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
