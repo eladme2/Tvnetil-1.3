@@ -7,16 +7,16 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "4.5.0",
+  version: "5.0.0",
   name: "TVNetil Direct Streams",
-  description: "Nuvio -> Serper 1 -> Scraper TVNetil -> Serper 2 -> Scraper Fave -> Nuvio Streams",
+  description: "Nuvio -> Serper 1 -> Scrape TVNetil Page HTML Title -> Serper 2 -> Scrape Fave -> Streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
 /* =========================================================
-   UTILITIES & CLEANING
+   TEXT CLEANING & UTILS
 ========================================================= */
 
 function decodeHtml(value) {
@@ -54,7 +54,7 @@ function extractUrlsFromText(text) {
 }
 
 /* =========================================================
-   SERPER SEARCH
+   SERPER SEARCH UTIL
 ========================================================= */
 
 async function serperSearch(query, num = 20) {
@@ -73,27 +73,35 @@ async function serperSearch(query, num = 20) {
 }
 
 /* =========================================================
-   STEP 2: SCRAPER - TVNETIL HTML TITLE
+   שלב 3: SCRAPER - פתיחת URL של TVNETIL וחילוץ כותרת מה-HTML
 ========================================================= */
 
-async function scrapeTVNetilTitle(pageUrl) {
-  console.log("SCRAPING TVNETIL PAGE:", pageUrl);
-  const secureUrl = pageUrl.replace(/^http:/i, "https:");
+async function scrapeTVNetilTitleFromUrl(targetUrl) {
+  console.log("[שלב 3] נכנס ל-URL של TVNetil וקורא את ה-HTML:", targetUrl);
+  
+  const secureUrl = targetUrl.replace(/^http:/i, "https:");
 
+  // כותרות מלאות המחכות דפדפן אמיתי לחלוטין כדי לעקוף חסימת 403
   const response = await fetch(secureUrl, {
+    method: "GET",
     headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+      "Cache-Control": "no-cache",
+      "Pragma": "no-cache",
+      "Upgrade-Insecure-Requests": "1"
     }
   });
 
   if (!response.ok) {
-    throw new Error(`TVNetil Scrape HTTP ${response.status}`);
+    throw new Error(`Scraper failed to fetch TVNetil HTML (HTTP Status: ${response.status})`);
   }
 
   const html = await response.text();
   const $ = cheerio.load(html);
 
+  // חילוץ הכותרת המדויקת מתוך תגיות ה-HTML של העמוד בלבד
   let exactTitle =
     $("h1.entry-title").text() ||
     $(".review-header h1").text() ||
@@ -105,14 +113,15 @@ async function scrapeTVNetilTitle(pageUrl) {
   exactTitle = cleanTVNetilTitle(exactTitle);
 
   if (!exactTitle) {
-    throw new Error("Could not extract title from TVNetil HTML");
+    throw new Error("Could not parse movie title from TVNetil HTML structure");
   }
 
+  console.log("[שלב 3] הכותרת המדויקת שחולצה מתוך ה-HTML של TVNetil היא:", exactTitle);
   return exactTitle;
 }
 
 /* =========================================================
-   STEP 4: SCRAPER & NUVIO STREAM FORMATTING (תיקון התוצאות)
+   חילוץ והמרת הלינקים ל-STREAMS של NUVIO
 ========================================================= */
 
 function normalizePixelDrainUrl(url) {
@@ -155,16 +164,15 @@ function normalizeGoFileUrl(url) {
   return null;
 }
 
-async function scrapeFaveToNuvioStreams(faveUrl, movieTitle) {
-  console.log("SCRAPING FAVE PAGE FOR STREAMS:", faveUrl);
+async function scrapeFaveToNuvioStreams(faveUrl, exactTitle) {
+  console.log("[שלב 4] סורק את עמוד ה-Fave שנמצא לקבלת קישורי צפייה:", faveUrl);
   const streams = [];
   const seenUrls = new Set();
 
   try {
     const response = await fetch(faveUrl, {
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36"
       }
     });
 
@@ -182,25 +190,23 @@ async function scrapeFaveToNuvioStreams(faveUrl, movieTitle) {
     const combinedUrls = Array.from(new Set([...pageUrls, ...extractUrlsFromText(html)]));
 
     for (const rawUrl of combinedUrls) {
-      // 1. חילוץ PixelDrain
       const pixelUrl = normalizePixelDrainUrl(rawUrl);
       if (pixelUrl && !seenUrls.has(pixelUrl)) {
         seenUrls.add(pixelUrl);
         streams.push({
-          name: "TVNetil",
-          title: `⚡ PixelDrain | ${movieTitle}`,
+          name: "TVNetil Direct",
+          title: `⚡ PixelDrain | ${exactTitle}`,
           url: pixelUrl,
           type: "http"
         });
       }
 
-      // 2. חילוץ GoFile
       const gofileUrl = normalizeGoFileUrl(rawUrl);
       if (gofileUrl && !seenUrls.has(gofileUrl)) {
         seenUrls.add(gofileUrl);
         streams.push({
-          name: "TVNetil",
-          title: `🚀 GoFile | ${movieTitle}`,
+          name: "TVNetil Direct",
+          title: `🚀 GoFile | ${exactTitle}`,
           url: gofileUrl,
           type: "http"
         });
@@ -214,11 +220,14 @@ async function scrapeFaveToNuvioStreams(faveUrl, movieTitle) {
 }
 
 /* =========================================================
-   COMPLETE FLOW
+   הזרימה המלאה והמדויקת לפי 4 השלבים
 ========================================================= */
 
 async function resolveTVNetil(hebrewTitle) {
-  // 1. Serper ראשון: מציאת דף TVNetil
+  // שלב 1: Nuvio מספק את hebrewTitle (לדוגמה: "בלאגן ביער")
+
+  // שלב 2: Serper ראשון - מציאת ה-URL בלבד ב-TVNetil
+  console.log("[שלב 2] הרצת Serper ראשון למציאת URL של TVNetil עבור:", hebrewTitle);
   const firstData = await serperSearch(`${hebrewTitle} TVNetil`, 20);
   const organic1 = Array.isArray(firstData?.organic) ? firstData.organic : [];
 
@@ -230,26 +239,30 @@ async function resolveTVNetil(hebrewTitle) {
     return { success: false, step: "tvnetil-url-not-found", streams: [] };
   }
 
-  // 2. Scraper: פתיחת ה-URL וחילוץ ה-HTML Title המדויק
-  let exactHtmlTitle = "";
+  const tvnetilUrl = tvnetilItem.link;
+
+  // שלב 3: Scraper נכנס ל-selected.link ומחלץ את הכותרת המדויקת מתוך דף ה-HTML
+  let exactTitleFromHtml = "";
   try {
-    exactHtmlTitle = await scrapeTVNetilTitle(tvnetilItem.link);
+    exactTitleFromHtml = await scrapeTVNetilTitleFromUrl(tvnetilUrl);
   } catch (err) {
     return {
       success: false,
-      step: "tvnetil-scraper-failed",
-      tvnetilUrl: tvnetilItem.link,
+      step: "tvnetil-html-scrape-failed",
+      tvnetilUrl,
       error: err.message,
       streams: []
     };
   }
 
-  // 3. Serper שני: חיפוש ב-Favez0ne עם הכותרת המדויקת שחולצה מה-HTML
-  const faveData = await serperSearch(`site:favez0ne.net "${exactHtmlTitle}"`, 20);
+  // שלב 4: Serper שני - חיפוש מתבצע אך ורק עם הכותרת שחולצה מה-HTML בשלב 3
+  console.log("[שלב 4] מריץ Serper שני עם הכותרת המדויקת שנשאבה מדף TVNetil:", exactTitleFromHtml);
+  const faveData = await serperSearch(`site:favez0ne.net "${exactTitleFromHtml}"`, 20);
   let organic2 = Array.isArray(faveData?.organic) ? faveData.organic : [];
 
   if (!organic2.length) {
-    const fallbackFave = await serperSearch(`site:favez0ne.net ${exactHtmlTitle}`, 20);
+    // במידה והחיפוש הקשיח לא החזיר תוצאה, מנסים ללא מרכאות עבור אותה כותרת שחולצה
+    const fallbackFave = await serperSearch(`site:favez0ne.net ${exactTitleFromHtml}`, 20);
     organic2 = Array.isArray(fallbackFave?.organic) ? fallbackFave.organic : [];
   }
 
@@ -257,29 +270,29 @@ async function resolveTVNetil(hebrewTitle) {
     return {
       success: false,
       step: "fave-page-not-found",
-      tvnetilUrl: tvnetilItem.link,
-      exactHtmlTitle,
+      tvnetilUrl,
+      exactTitleFromHtml,
       streams: []
     };
   }
 
   const faveUrl = organic2[0].link;
 
-  // 4. Scraper Fave & Streams Conversion (הפיכה לפורמט Nuvio)
-  const streams = await scrapeFaveToNuvioStreams(faveUrl, exactHtmlTitle);
+  // חילוץ הקישורים מדף ה-Fave והצגתם בפורמט Nuvio Streams
+  const streams = await scrapeFaveToNuvioStreams(faveUrl, exactTitleFromHtml);
 
   return {
     success: streams.length > 0,
     hebrewTitle,
-    tvnetilUrl: tvnetilItem.link,
-    exactHtmlTitle,
+    tvnetilUrl,
+    exactTitleFromHtml, // הכותרת מתוך ה-HTML מדף TVNetil
     faveUrl,
     streams
   };
 }
 
 /* =========================================================
-   ROUTES & NUVIO ENDPOINTS
+   ROUTES
 ========================================================= */
 
 app.get("/test-title", async (req, res) => {
@@ -293,19 +306,8 @@ app.get("/test-title", async (req, res) => {
   }
 });
 
-app.get("/stream/:type/:id.json", async (req, res) => {
-  const { id } = req.params;
-  // Endpoint ייעודי ש-Nuvio פונה אליו ישירות לקבלת ה-Streams
-  try {
-    const result = await resolveTVNetil(id);
-    return res.json({ streams: result.streams || [] });
-  } catch {
-    return res.json({ streams: [] });
-  }
-});
-
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 4.5.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 5.0.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
