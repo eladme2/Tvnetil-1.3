@@ -7,9 +7,9 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "4.0.0",
+  version: "4.1.0",
   name: "TVNetil Direct Streams",
-  description: "Exact Flow: Nuvio -> Serper 1 -> TVNetil Link -> Web Scraper (with Serper Cache Fallback) -> Serper 2 (Fave) -> Nuvio",
+  description: "Nuvio -> Serper 1 -> TVNetil Title -> Flexible Serper 2 (Fave Only) -> Nuvio",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -91,6 +91,15 @@ function cleanTVNetilTitle(rawTitle) {
     .trim();
 }
 
+// ניקוי הכותרת לשם בסיסי (ללא שנה בסוגריים/מדובב) עבור שאילתות Fave
+function extractBaseTitle(exactTitle) {
+  return exactTitle
+    .replace(/\(\d{4}\)/g, "")
+    .replace(/[-|–—]\s*מדובב/gi, "")
+    .replace(/מדובב/gi, "")
+    .trim();
+}
+
 /* =========================================================
    STEP 2: SCRAPER WITH SMART FALLBACK
 ========================================================= */
@@ -98,8 +107,6 @@ function cleanTVNetilTitle(rawTitle) {
 async function fetchTVNetilTitle(selectedResult) {
   const pageUrl = selectedResult.link;
   const secureUrl = pageUrl.replace(/^http:/i, "https:");
-  console.log("======================================");
-  console.log("ATTEMPTING DIRECT SCRAPE OF TVNETIL PAGE:", secureUrl);
 
   try {
     const response = await fetch(secureUrl, {
@@ -126,19 +133,14 @@ async function fetchTVNetilTitle(selectedResult) {
       scrapedTitle = cleanTVNetilTitle(scrapedTitle);
 
       if (scrapedTitle) {
-        console.log("SUCCESSFULLY SCRAPED DIRECT TITLE:", scrapedTitle);
         return { title: scrapedTitle, source: "direct-scrape" };
       }
-    } else {
-      console.warn(`Direct scrape returned HTTP ${response.status}. Switching to Serper cache title.`);
     }
   } catch (err) {
-    console.warn("Direct scrape failed:", err.message, "- Switching to Serper cache title.");
+    console.warn("Direct scrape failed, using fallback title from Serper.");
   }
 
-  // Fallback: חילוץ הכותרת המדויקת שהוחזרה מ-Serper (אשר סרק את הדף מראש)
   const cachedTitle = cleanTVNetilTitle(selectedResult.title);
-  console.log("USING SERPER INDEXED TITLE:", cachedTitle);
   return { title: cachedTitle, source: "serper-indexed-title" };
 }
 
@@ -150,9 +152,6 @@ async function serperSearch(query, num = 20) {
   if (!SERPER_API_KEY) {
     throw new Error("SERPER_API_KEY is missing");
   }
-
-  console.log("======================================");
-  console.log("SERPER QUERY:", query);
 
   const response = await fetch("https://google.serper.dev/search", {
     method: "POST",
@@ -281,7 +280,7 @@ function chooseTVNetilResult(results, hebrewTitle) {
 }
 
 /* =========================================================
-   STEP 3: SERPER SECOND SEARCH (Exact TVNetil Title -> Fave ONLY)
+   STEP 3: SERPER SECOND SEARCH (Fave ONLY) - FLEXIBLE QUERIES
 ========================================================= */
 
 async function searchFave(tvnetilTitle) {
@@ -289,11 +288,17 @@ async function searchFave(tvnetilTitle) {
     return { queries: [], resultCount: 0, results: [] };
   }
 
+  const baseTitle = extractBaseTitle(tvnetilTitle);
+  const yearMatch = tvnetilTitle.match(/\b(19\d\d|20\d\d)\b/);
+  const year = yearMatch ? yearMatch[1] : "";
+  const isDubbed = /מדובב/i.test(tvnetilTitle);
+
+  // בניית שאילתות חכמות המבטיחות התאמה לפורמטים של Fave
   const queries = [
-    `site:favez0ne.net "${tvnetilTitle}"`,
-    `site:favez0ne.net ${tvnetilTitle}`,
-    `site:favez0ne.net "${tvnetilTitle}" "pixeldrain"`,
-    `site:favez0ne.net "${tvnetilTitle}" "gofile"`
+    `site:favez0ne.net "${baseTitle}" ${year} ${isDubbed ? "מדובב" : ""}`.trim(),
+    `site:favez0ne.net "${baseTitle}" ${year}`.trim(),
+    `site:favez0ne.net "${baseTitle}"`,
+    `site:favez0ne.net ${tvnetilTitle}`
   ];
 
   const collected = [];
@@ -327,6 +332,11 @@ async function searchFave(tvnetilTitle) {
         seen.add(link);
         collected.push(result);
       }
+
+      // ברגע שנמצאו תוצאות איכותיות ב-Fave, עוצרים כדי לחסוך קריאות API
+      if (collected.length > 0) {
+        break;
+      }
     } catch (error) {
       console.error("FAVE SEARCH ERROR:", error.message);
     }
@@ -340,7 +350,7 @@ async function searchFave(tvnetilTitle) {
 }
 
 /* =========================================================
-   URL EXTRACTION (PixelDrain / GoFile from Fave Results)
+   URL EXTRACTION & STREAM BUILDING
 ========================================================= */
 
 function extractUrlsFromText(text) {
@@ -429,22 +439,19 @@ function extractFaveStreams(faveSearch) {
 ========================================================= */
 
 async function resolveTVNetil(hebrewTitle) {
-  console.log("======================================");
-  console.log("1. NUVIO RECEIVED HEBREW TITLE:", hebrewTitle);
-
   // 1. Serper 1: Nuvio -> TVNetil Link
   const firstSearch = await searchTVNetil(hebrewTitle);
   if (!firstSearch.results.length) {
     return { success: false, step: "tvnetil-search-failed", hebrewTitle, firstSearch, streams: [] };
   }
 
-  // 2. בחירת התוצאה המדויקת
+  // 2. בחירת תוצאה מועדפת מ-TVNetil
   const selected = chooseTVNetilResult(firstSearch.results, hebrewTitle);
   if (!selected || !selected.link) {
     return { success: false, step: "tvnetil-selection-failed", hebrewTitle, firstSearch, streams: [] };
   }
 
-  // 3. Scraper: ניסיון direct fetch + גיבוי אוטומטי לכותרת המאונדקסת מ-Serper
+  // 3. שליפת הכותרת המדויקת מדף הסרט
   const titleInfo = await fetchTVNetilTitle(selected);
   const tvnetilTitle = titleInfo.title;
 
@@ -458,12 +465,10 @@ async function resolveTVNetil(hebrewTitle) {
     };
   }
 
-  console.log("EXACT TITLE FOR FAVE SEARCH:", tvnetilTitle, `(Source: ${titleInfo.source})`);
-
-  // 4. Serper 2: חיפוש ב-Fave בלבד
+  // 4. Serper 2: חיפוש ב-Fave בלבד ע"י השאילתות החכמות
   const faveSearch = await searchFave(tvnetilTitle);
 
-  // 5. חילוץ הלינקים והחזרה ל-Nuvio
+  // 5. חילוץ קישורים והחזרה ל-Nuvio
   const streams = extractFaveStreams(faveSearch);
 
   return {
@@ -570,11 +575,11 @@ app.get("/manifest.json", (_, res) => {
 });
 
 app.get("/", (_, res) => {
-  res.send("TVNetil Direct Streams 4.0.0");
+  res.send("TVNetil Direct Streams 4.1.0");
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("TVNetil Direct Streams 4.0.0 started");
+  console.log("TVNetil Direct Streams 4.1.0 started");
 });
 
 export default app;
