@@ -9,15 +9,14 @@ const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
   version: "4.0.0",
   name: "TVNetil Direct Streams",
-  description:
-    "Nuvio Hebrew title -> Serper -> TVNetil -> Web Scraper -> Exact Page Title -> Serper 2 (Fave only) -> Nuvio",
+  description: "Exact Flow: Nuvio -> Serper 1 -> TVNetil Link -> Web Scraper -> Exact Page Title -> Serper 2 (Fave) -> Nuvio",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
 /* =========================================================
-   HTTP HELPERS
+   HTTP UTILS
 ========================================================= */
 
 async function getJson(url, options = {}) {
@@ -26,7 +25,7 @@ async function getJson(url, options = {}) {
     redirect: "follow",
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
       Accept: "application/json,text/plain,*/*",
       "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
       ...(options.headers || {})
@@ -84,30 +83,41 @@ function hasHebrew(value) {
 }
 
 /* =========================================================
-   STEP 2 (SCRAPER): FETCH EXACT TITLE FROM TVNETIL PAGE
+   STEP 3: MANDATORY SCRAPER (TVNETIL PAGE ONLY)
 ========================================================= */
 
 async function fetchTVNetilPageTitle(pageUrl) {
+  // המרה ל-HTTPS חובה כדי למנוע חסימות Redirects ב-Vercel
+  const targetUrl = pageUrl.replace(/^http:/i, "https:");
   console.log("======================================");
-  console.log("SCRAPING TVNETIL PAGE:", pageUrl);
+  console.log("MANDATORY SCRAPING TVNETIL PAGE:", targetUrl);
 
-  const response = await fetch(pageUrl, {
+  const response = await fetch(targetUrl, {
+    redirect: "follow",
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+      "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124"',
+      "Sec-Ch-Ua-Mobile": "?0",
+      "Sec-Ch-Ua-Platform": '"Windows"',
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-User": "?1",
+      "Upgrade-Insecure-Requests": "1"
     }
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to scrape TVNetil page. Status: ${response.status}`);
+    throw new Error(`Scraper HTTP Error: ${response.status}`);
   }
 
   const html = await response.text();
   const $ = cheerio.load(html);
 
-  // חילוץ הכותרת מתוך אלמנט הכותרת בדף (H1 או Title)
+  // חילוץ הכותרת בלבד מתוך אלמנט H1 או Title של דף TVNetil
   let extractedTitle =
     $("h1.entry-title").text() ||
     $(".review-header h1").text() ||
@@ -117,14 +127,18 @@ async function fetchTVNetilPageTitle(pageUrl) {
 
   extractedTitle = cleanText(extractedTitle);
 
-  // הסרת סיומות ושם האתר מהכותרת
+  // ניקוי סיומות שאינן חלק מכותרת הסרט
   extractedTitle = extractedTitle
     .replace(/\s*[-|–—]\s*TVNetil.*$/iu, "")
     .replace(/^TVNetil\.net\s*[-|:]\s*/iu, "")
     .trim();
 
-  console.log("EXTRACTED EXACT TVNETIL TITLE:", extractedTitle);
-  return extractedTitle || null;
+  if (!extractedTitle) {
+    throw new Error("Failed to parse title element from TVNetil HTML.");
+  }
+
+  console.log("EXACT TITLE SCRAPED FROM PAGE:", extractedTitle);
+  return extractedTitle;
 }
 
 /* =========================================================
@@ -266,24 +280,19 @@ function chooseTVNetilResult(results, hebrewTitle) {
 }
 
 /* =========================================================
-   STEP 3: SERPER SECOND SEARCH (Scraped TVNetil Title -> Fave ONLY)
+   STEP 5: SERPER SECOND SEARCH (Scraped TVNetil Title -> Fave ONLY)
 ========================================================= */
 
-async function searchFave(tvnetilTitle) {
-  if (!tvnetilTitle) {
-    return {
-      queries: [],
-      resultCount: 0,
-      results: []
-    };
+async function searchFave(exactScrapedTitle) {
+  if (!exactScrapedTitle) {
+    return { queries: [], resultCount: 0, results: [] };
   }
 
-  // חיפוש ממוקד ב-Fave בלבד לפי הכותרת המדויקת שנשלפה
   const queries = [
-    `site:favez0ne.net "${tvnetilTitle}"`,
-    `site:favez0ne.net ${tvnetilTitle}`,
-    `site:favez0ne.net "${tvnetilTitle}" "pixeldrain"`,
-    `site:favez0ne.net "${tvnetilTitle}" "gofile"`
+    `site:favez0ne.net "${exactScrapedTitle}"`,
+    `site:favez0ne.net ${exactScrapedTitle}`,
+    `site:favez0ne.net "${exactScrapedTitle}" "pixeldrain"`,
+    `site:favez0ne.net "${exactScrapedTitle}" "gofile"`
   ];
 
   const collected = [];
@@ -306,7 +315,6 @@ async function searchFave(tvnetilTitle) {
 
         const link = String(result.link || "").trim().toLowerCase();
 
-        // סינון קשיח - רק תוצאות מ-favez0ne.net
         if (!link.includes("favez0ne.net")) {
           continue;
         }
@@ -416,59 +424,54 @@ function extractFaveStreams(faveSearch) {
 }
 
 /* =========================================================
-   COMPLETE EXACT FLOW Execution
+   STRICT EXECUTION FLOW:
+   Nuvio -> Serper -> TVNetil -> Scraper -> Exact Page Title -> Serper 2 -> Nuvio
 ========================================================= */
 
 async function resolveTVNetil(hebrewTitle) {
   console.log("======================================");
-  console.log("FLOW START: NUVIO HEBREW TITLE:", hebrewTitle);
+  console.log("1. NUVIO RECEIVED HEBREW TITLE:", hebrewTitle);
 
-  // 1. Serper 1: Nuvio -> TVNetil
+  // 1. Serper ראשון למציאת קישור לדף הסרט ב-TVNetil
   const firstSearch = await searchTVNetil(hebrewTitle);
   if (!firstSearch.results.length) {
-    return { success: false, step: "tvnetil-search", hebrewTitle, firstSearch, streams: [] };
+    return { success: false, step: "tvnetil-search-failed", hebrewTitle, firstSearch, streams: [] };
   }
 
-  // בחירת תוצאת TVNetil המתאימה ביותר
+  // 2. איתור דף ה-TVNetil המדויק
   const selected = chooseTVNetilResult(firstSearch.results, hebrewTitle);
   if (!selected || !selected.link) {
-    return { success: false, step: "tvnetil-selection", hebrewTitle, firstSearch, streams: [] };
+    return { success: false, step: "tvnetil-selection-failed", hebrewTitle, firstSearch, streams: [] };
   }
 
-  // 2. Scraper: כניסה לדף TVNetil וחילוץ הכותרת מדף הסרט בלבד
-  let tvnetilTitle = null;
+  // 3. SCRAPER: כניסה חובה לדף ה-TVNetil ושליפת הכותרת מתוך ה-HTML
+  let exactScrapedTitle = null;
   try {
-    tvnetilTitle = await fetchTVNetilPageTitle(selected.link);
+    exactScrapedTitle = await fetchTVNetilPageTitle(selected.link);
   } catch (error) {
-    console.error("SCRAPER ERROR:", error.message);
-  }
-
-  if (!tvnetilTitle) {
+    console.error("SCRAPER FAILED:", error.message);
     return {
       success: false,
-      step: "tvnetil-scraping-failed",
-      hebrewTitle,
-      tvnetilResult: selected,
+      step: "tvnetil-scraper-failed",
+      error: error.message,
+      tvnetilPageUrl: selected.link,
       streams: []
     };
   }
 
-  console.log("EXACT TVNETIL TITLE FOR SECOND SERPER SEARCH:", tvnetilTitle);
+  // 4. Serper שני: חיפוש ב-Fave בלבד *רק* בעזרת הכותרת שנשלפה מדף הסרט
+  const faveSearch = await searchFave(exactScrapedTitle);
 
-  // 3. Serper 2: חיפוש ב-Fave בלבד לפי הכותרת המדויקת מה-Scraper
-  const faveSearch = await searchFave(tvnetilTitle);
-  console.log("FAVE RESULTS COUNT:", faveSearch.resultCount);
-
-  // 4. חילוץ הלינקים שחזרו מ תוצאות Fave והחזרה ל-Nuvio
+  // 5. חילוץ התוצאות והחזרה ל-Nuvio
   const streams = extractFaveStreams(faveSearch);
 
   return {
     success: streams.length > 0,
-    step: streams.length > 0 ? "streams" : "fave-results",
+    step: streams.length > 0 ? "streams" : "fave-results-empty",
     hebrewTitle,
     firstSearch,
     tvnetilResult: selected,
-    tvnetilTitle,
+    exactScrapedTitle,
     faveSearch,
     streams
   };
