@@ -6,10 +6,10 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "3.8.2",
+  version: "4.1.0",
   name: "TVNetil Direct Streams",
   description:
-    "Nuvio Hebrew title -> TVNetil -> exact result title -> Favez0ne Search -> PixelDrain/GoFile streams",
+    "Hebrew title -> TVNetil site search -> Exact review title & year -> Fave site search -> GoFile/PixelDrain streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -172,7 +172,7 @@ function getHebrewTitle(req, metadata) {
 }
 
 /* =========================================================
-   STEP 1: TVNETIL SEARCH
+   STEP 1: TVNETIL SEARCH (חיפוש שם הסרט ב-TVNetil)
 ========================================================= */
 
 async function searchTVNetil(hebrewTitle) {
@@ -180,19 +180,17 @@ async function searchTVNetil(hebrewTitle) {
     return { query: null, resultCount: 0, results: [] };
   }
 
-  const query = `${hebrewTitle} TVNetil`;
+  const query = `site:tvnetil.net/review ${hebrewTitle}`;
   const data = await serperSearch(query, 20);
   const organic = Array.isArray(data?.organic) ? data.organic : [];
 
-  const allResults = organic.map(item => ({
+  const tvnetilResults = organic.map(item => ({
     title: item?.title || null,
     link: item?.link || null,
     snippet: item?.snippet || null,
     date: item?.date || null,
     position: item?.position || null
-  }));
-
-  const tvnetilResults = allResults.filter(item => {
+  })).filter(item => {
     const link = String(item.link || "").toLowerCase();
     return link.includes("tvnetil.net/review/");
   });
@@ -200,8 +198,7 @@ async function searchTVNetil(hebrewTitle) {
   return {
     query,
     resultCount: tvnetilResults.length,
-    results: tvnetilResults,
-    allSearchResults: allResults
+    results: tvnetilResults
   };
 }
 
@@ -244,7 +241,7 @@ function chooseTVNetilResult(results, hebrewTitle) {
 }
 
 /* =========================================================
-   STEP 3: GET RESULT TITLE (שמירת שנה מדויקת וסגריים)
+   STEP 3: GET EXACT TITLE & YEAR FROM REVIEW PAGE
 ========================================================= */
 
 function getTVNetilTitle(selected) {
@@ -252,34 +249,28 @@ function getTVNetilTitle(selected) {
 
   let title = cleanText(selected.title || "");
   
-  // הסרת מילים כמו "מדובב", "מתורגם" ומזהי TVNetil, אבל השארת השנה המקורית בסוגריים כפי שהיא
   title = title.replace(/מדובב|מתורגם/gi, "");
   title = title.replace(/\s*[-|–—]\s*TVNetil.*$/iu, "");
-  
-  // הסרת מקפים בודדים שנשארו בסוף
   title = title.replace(/[\s\-–—]+$/, "");
-  
-  // ניקוי רווחים סופי
   title = title.replace(/\s+/g, " ").trim();
 
   return title || null;
 }
 
 /* =========================================================
-   STEP 4: FAVEZ0ne SEARCH (שליחת הכותרת המקורית המלאה בתוספת favez0ne)
+   STEP 4: FAVE SITE SEARCH (חיפוש הכותרת המדויקת בתוך אתר fave בלבד)
 ========================================================= */
 
-async function searchFavez0ne(tvnetilTitle) {
+async function searchFave(tvnetilTitle) {
   if (!tvnetilTitle) {
     return { query: null, resultCount: 0, results: [] };
   }
 
-  // שולח את השם בדיוק כמו שהוא מ-TVNetil (לדוגמה: בלאגן ביער (2025)) יחד עם המילה favez0ne
-  const query = `${tvnetilTitle} favez0ne`;
+  const query = `site:favez0ne.com ${tvnetilTitle}`;
   const data = await serperSearch(query, 20);
   const organic = Array.isArray(data?.organic) ? data.organic : [];
 
-  const favezResults = organic
+  const faveResults = organic
     .map(item => ({
       title: item?.title || null,
       link: item?.link || null,
@@ -294,13 +285,13 @@ async function searchFavez0ne(tvnetilTitle) {
 
   return {
     query,
-    resultCount: favezResults.length,
-    results: favezResults
+    resultCount: faveResults.length,
+    results: faveResults
   };
 }
 
 /* =========================================================
-   STEP 5: FIND PIXELDRAIN / GOFILE
+   STEP 5: EXTRACT GOFILE / PIXELDRAIN STREAMS
 ========================================================= */
 
 function findStreamResults(results) {
@@ -346,60 +337,60 @@ async function resolveTVNetil(hebrewTitle) {
   console.log("FLOW START");
   console.log("HEBREW TITLE:", hebrewTitle);
 
-  const firstSearch = await searchTVNetil(hebrewTitle);
-  console.log("FIRST SEARCH RESULTS:", firstSearch.resultCount);
+  const tvnetilSearch = await searchTVNetil(hebrewTitle);
+  console.log("TVNETIL RESULTS:", tvnetilSearch.resultCount);
 
-  if (!firstSearch.results.length) {
+  if (!tvnetilSearch.results.length) {
     return {
       success: false,
       step: "tvnetil-search",
       hebrewTitle,
-      firstSearch,
+      tvnetilSearch,
       streams: []
     };
   }
 
-  const selected = chooseTVNetilResult(firstSearch.results, hebrewTitle);
+  const selected = chooseTVNetilResult(tvnetilSearch.results, hebrewTitle);
   if (!selected) {
     return {
       success: false,
       step: "tvnetil-selection",
       hebrewTitle,
-      firstSearch,
+      tvnetilSearch,
       streams: []
     };
   }
 
-  console.log("TVNETIL RESULT:", selected);
+  console.log("SELECTED TVNETIL REVIEW:", selected);
 
   const tvnetilTitle = getTVNetilTitle(selected);
-  console.log("TVNETIL TITLE:", tvnetilTitle);
+  console.log("EXACT TITLE & YEAR:", tvnetilTitle);
 
   if (!tvnetilTitle) {
     return {
       success: false,
       step: "tvnetil-result-title",
       hebrewTitle,
-      firstSearch,
+      tvnetilSearch,
       tvnetilResult: selected,
       streams: []
     };
   }
 
-  const favezSearch = await searchFavez0ne(tvnetilTitle);
-  console.log("FAVEZ0NE SEARCH RESULTS:", favezSearch.resultCount);
+  const faveSearch = await searchFave(tvnetilTitle);
+  console.log("FAVE RESULTS:", faveSearch.resultCount);
 
-  const streams = findStreamResults(favezSearch.results);
+  const streams = findStreamResults(faveSearch.results);
   console.log("STREAM RESULTS:", streams.length);
 
   return {
     success: streams.length > 0,
     step: streams.length > 0 ? "streams" : "results",
     hebrewTitle,
-    firstSearch,
+    tvnetilSearch,
     tvnetilResult: selected,
     tvnetilTitle,
-    favezSearch,
+    faveSearch,
     streamResults: streams,
     streams
   };
@@ -508,7 +499,7 @@ app.get("/manifest.json", (_, res) => {
 ========================================================= */
 
 app.get("/", (_, res) => {
-  res.send("TVNetil Direct Streams 3.8.2");
+  res.send("TVNetil Direct Streams 4.1.0");
 });
 
 /* =========================================================
@@ -516,7 +507,7 @@ app.get("/", (_, res) => {
 ========================================================= */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("TVNetil Direct Streams 3.8.2 started");
+  console.log("TVNetil Direct Streams 4.1.0 started");
 });
 
 export default app;
