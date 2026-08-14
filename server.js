@@ -6,7 +6,7 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "3.7.0",
+  version: "3.7.1",
   name: "TVNetil Direct Streams",
   description:
     "Nuvio Hebrew title -> TVNetil -> result title -> Favez0ne Search -> PixelDrain/GoFile streams",
@@ -244,7 +244,7 @@ function chooseTVNetilResult(results, hebrewTitle) {
 }
 
 /* =========================================================
-   STEP 3: GET RESULT TITLE (שומר שנה בסוגריים, מנקה מדובב/TVNetil)
+   STEP 3: GET RESULT TITLE (שומר שנה בסוגריים, מנקה מדובב/מקפים מיותרים)
 ========================================================= */
 
 function getTVNetilTitle(selected) {
@@ -252,11 +252,14 @@ function getTVNetilTitle(selected) {
 
   let title = cleanText(selected.title || "");
   
-  // הסרת מילים כמו "מדובב", "מתורגם" ושאר תוספות ספציפיות של TVNetil, אבל השארת השנה בסוגריים (למשל 2025)
+  // הסרת מילים מיותרות ומזהי TVNetil
   title = title.replace(/מדובב|מתורגם/gi, "");
   title = title.replace(/\s*[-|–—]\s*TVNetil.*$/iu, "");
   
-  // ניקוי רווחים מיותרים שנוצרו
+  // הסרת מקפים עיוורים או סמנים שנשארו בסוף (לדוגמה לאחר הסרת מילים)
+  title = title.replace(/[\s\-–—]+$/, "");
+  
+  // ניקוי רווחים סופי
   title = title.replace(/\s+/g, " ").trim();
 
   return title || null;
@@ -504,7 +507,7 @@ app.get("/manifest.json", (_, res) => {
 ========================================================= */
 
 app.get("/", (_, res) => {
-  res.send("TVNetil Direct Streams 3.7.0");
+  res.send("TVNetil Direct Streams 3.7.1");
 });
 
 /* =========================================================
@@ -512,7 +515,7 @@ app.get("/", (_, res) => {
 ========================================================= */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("TVNetil Direct Streams 3.7.0 started");
+  console.log("TVNetil Direct Streams 3.7.1 started");
 });
 
 export default app;
