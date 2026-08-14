@@ -7,9 +7,9 @@ const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "10.2.0",
+  version: "10.5.0",
   name: "TVNetil Direct Streams",
-  description: "Strict Flow: Nuvio -> TVNetil Title -> Favez0ne Direct Search & Streams",
+  description: "Strict Flow: TVNetil Title (Name + Year) -> Favez0ne Search",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -35,14 +35,25 @@ function cleanTvnetilHeaderTitle(rawTitle) {
   if (!rawTitle) return "";
   let title = decodeHtmlEntities(rawTitle).trim();
 
+  // הסרת סיומות אתר TVNetil בלבד
   title = title
     .replace(/\s*[-|–—:]\s*TVNetil.*$/iu, "")
     .replace(/^TVNetil\.net\s*[-|:]\s*/iu, "")
     .replace(/\s*[-|–—:]\s*סרטים.*$/iu, "")
     .replace(/\s*[-|–—:]\s*סדרות.*$/iu, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .trim();
 
   return title;
+}
+
+// חותך רק את הסיומות מילוליות (כמו - מדובב / - מתורגם) ומשאיר "שם הסרט (שנה)"
+function formatTitleForFavez0ne(titleFromTvnetil) {
+  if (!titleFromTvnetil) return "";
+  
+  return titleFromTvnetil
+    .replace(/\s*[-|–—:]\s*(מדובב|מתורגם|תרגום מובנה|איכות|1080p|720p|HD|WEBRip|BDRip).*$/iu, "")
+    .trim();
 }
 
 function extractUrlsFromText(text) {
@@ -79,13 +90,12 @@ async function fetchPageHtml(targetUrl, isWindows1255 = false) {
 }
 
 /* =========================================================
-   שלב 1 + 2: משיכת השם מ-Nuvio -> חיפוש ב-TVNetil -> העתקת כותרת
+   שלב 1 + 2: איתור TVNetil והוצאת הכותרת המדויקת מהדף
 ========================================================= */
 
 async function getTvnetilDetails(hebrewTitle) {
-  console.log("[שלב 1 - Nuvio Title] התקבל שם בעברית:", hebrewTitle);
+  console.log("[שלב 1 - Nuvio Title] שם מ-Nuvio:", hebrewTitle);
 
-  // חיפוש פנימי ב-TVNetil
   const searchUrl = `https://www.tvnetil.net/index.php?act=search&CODE=01&q=${encodeURIComponent(hebrewTitle)}`;
   const searchHtml = await fetchPageHtml(searchUrl, true);
   const $search = cheerio.load(searchHtml);
@@ -103,7 +113,7 @@ async function getTvnetilDetails(hebrewTitle) {
     throw new Error(`שלב 1 נכשל: לא נמצא עמוד ב-TVNetil עבור השם "${hebrewTitle}"`);
   }
 
-  console.log("[שלב 2 - TVNetil HTML] נכנס לעמוד לחלץ כותרת מדויקת:", tvnetilPageUrl);
+  console.log("[שלב 2 - TVNetil HTML] נכנס לדף להעתיק כותרת:", tvnetilPageUrl);
   const pageHtml = await fetchPageHtml(tvnetilPageUrl, true);
   const $page = cheerio.load(pageHtml);
 
@@ -120,22 +130,26 @@ async function getTvnetilDetails(hebrewTitle) {
     throw new Error("שלב 2 נכשל: לא ניתן היה לחלץ כותרת מתוך דף ה-TVNetil");
   }
 
-  console.log("[שלב 2 - תוצאה] כותרת בעברית שנשלפה מ-TVNetil:", exactTitleFromTvnetil);
+  console.log("[שלב 2 - כותרת מלאה מ-TVNetil]:", exactTitleFromTvnetil);
   return { tvnetilPageUrl, exactTitleFromTvnetil };
 }
 
 /* =========================================================
-   שלב 3: חיפוש ישיר ב-Favez0ne עם הכותרת מ-TVNetil
+   שלב 3: חיפוש ב-Favez0ne בפורמט "שם (שנה)"
 ========================================================= */
 
-async function searchFavez0neDirect(exactTitle) {
-  console.log("[שלב 3 - Favez0ne] מדביק בחיפוש Favez0ne:", exactTitle);
+async function searchFavez0ne(exactTitleFromTvnetil) {
+  // התאמת הכותרת לפורמט של Favez0ne (למשל: "בלאגן ביער (2025)")
+  const faveSearchTerm = formatTitleForFavez0ne(exactTitleFromTvnetil);
+  
+  console.log("[שלב 3 - Favez0ne] מדביק בחיפוש Favez0ne:", faveSearchTerm);
 
-  let faveSearchUrl = `https://favez0ne.net/?s=${encodeURIComponent(exactTitle)}`;
-  let html = await fetchPageHtml(faveSearchUrl, false);
-  let $ = cheerio.load(html);
+  const faveSearchUrl = `https://favez0ne.net/?s=${encodeURIComponent(faveSearchTerm)}`;
+  const html = await fetchPageHtml(faveSearchUrl, false);
+  const $ = cheerio.load(html);
 
   let favePostUrl = "";
+
   $("a[href*='favez0ne.net']").each((_, el) => {
     const href = $(el).attr("href");
     if (href && href.includes("/20") && !favePostUrl && !href.includes("?s=")) {
@@ -143,35 +157,16 @@ async function searchFavez0neDirect(exactTitle) {
     }
   });
 
-  // ניסיון משני ללא סוגריים במידה והכותרת לא החזירה תוצאה בחיפוש
   if (!favePostUrl) {
-    const cleanTitle = exactTitle
-      .replace(/\([^)]*\)/g, "")
-      .replace(/\s*[-|–—:]\s*(מדובב|מתורגם|תרגום מובנה).*$/iu, "")
-      .trim();
-
-    console.log("[שלב 3 - ניסיון משני] מחפש שם מנוקה ב-Favez0ne:", cleanTitle);
-    faveSearchUrl = `https://favez0ne.net/?s=${encodeURIComponent(cleanTitle)}`;
-    html = await fetchPageHtml(faveSearchUrl, false);
-    $ = cheerio.load(html);
-
-    $("a[href*='favez0ne.net']").each((_, el) => {
-      const href = $(el).attr("href");
-      if (href && href.includes("/20") && !favePostUrl && !href.includes("?s=")) {
-        favePostUrl = href;
-      }
-    });
+    throw new Error(`שלב 3 נכשל: לא נמצא פוסט ב-Favez0ne עבור השאילתה "${faveSearchTerm}"`);
   }
 
-  if (!favePostUrl) {
-    throw new Error("שלב 3 נכשל: לא נמצא פוסט תואם ב-Favez0ne");
-  }
-
-  return favePostUrl;
+  console.log("[שלב 3 - הצלחה] נמצא פוסט ב-Favez0ne:", favePostUrl);
+  return { favePostUrl, faveSearchTerm };
 }
 
 /* =========================================================
-   שלב 4: משיכת קישורי צפייה ישירים מתוך עמוד ה-Favez0ne
+   שלב 4: משיכת קישורי צפייה ישירים
 ========================================================= */
 
 function normalizePixelDrainUrl(url) {
@@ -253,22 +248,23 @@ async function extractStreamsFromFavePage(faveUrl, exactTitle) {
 
 async function resolveDirectFlow(hebrewTitle) {
   try {
-    // 1+2. משיכת שם מ-Nuvio -> מציאת דף TVNetil -> העתקת כותרת מדויקת בעברית
+    // 1+2. איתור דף TVNetil והעתקת הכותרת המלאה מהדף
     const { tvnetilPageUrl, exactTitleFromTvnetil } = await getTvnetilDetails(hebrewTitle);
 
-    // 3. חיפוש ישיר ב-Favez0ne
-    const faveUrl = await searchFavez0neDirect(exactTitleFromTvnetil);
+    // 3. חיפוש ב-Favez0ne בפורמט "שם (שנה)"
+    const { favePostUrl, faveSearchTerm } = await searchFavez0ne(exactTitleFromTvnetil);
 
-    // 4. משיכת קישורי צפייה (PixelDrain / GoFile) מתוך Favez0ne
-    const streams = await extractStreamsFromFavePage(faveUrl, exactTitleFromTvnetil);
+    // 4. משיכת הקישורים הישירים מ-Favez0ne
+    const streams = await extractStreamsFromFavePage(favePostUrl, exactTitleFromTvnetil);
 
     return {
       success: streams.length > 0,
       pipeline: {
-        step1_nuvioHebrewTitle: hebrewTitle,
+        step1_nuvioTitle: hebrewTitle,
         step2_tvnetilPageUrl: tvnetilPageUrl,
-        step3_exactTitleExtractedFromTvnetil: exactTitleFromTvnetil,
-        step4_favePostUrl: faveUrl,
+        step2_exactTitleFromTvnetilPage: exactTitleFromTvnetil,
+        step3_faveSearchTermUsed: faveSearchTerm,
+        step3_favePostUrl: favePostUrl,
         step4_extractedStreamsCount: streams.length
       },
       streams
@@ -294,7 +290,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 10.2.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 10.5.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
