@@ -6,10 +6,10 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "3.7.1",
+  version: "3.8.2",
   name: "TVNetil Direct Streams",
   description:
-    "Nuvio Hebrew title -> TVNetil -> result title -> Favez0ne Search -> PixelDrain/GoFile streams",
+    "Nuvio Hebrew title -> TVNetil -> exact result title -> Favez0ne Search -> PixelDrain/GoFile streams",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -244,7 +244,7 @@ function chooseTVNetilResult(results, hebrewTitle) {
 }
 
 /* =========================================================
-   STEP 3: GET RESULT TITLE (שומר שנה בסוגריים, מנקה מדובב/מקפים מיותרים)
+   STEP 3: GET RESULT TITLE (שמירת שנה מדויקת וסגריים)
 ========================================================= */
 
 function getTVNetilTitle(selected) {
@@ -252,11 +252,11 @@ function getTVNetilTitle(selected) {
 
   let title = cleanText(selected.title || "");
   
-  // הסרת מילים מיותרות ומזהי TVNetil
+  // הסרת מילים כמו "מדובב", "מתורגם" ומזהי TVNetil, אבל השארת השנה המקורית בסוגריים כפי שהיא
   title = title.replace(/מדובב|מתורגם/gi, "");
   title = title.replace(/\s*[-|–—]\s*TVNetil.*$/iu, "");
   
-  // הסרת מקפים עיוורים או סמנים שנשארו בסוף (לדוגמה לאחר הסרת מילים)
+  // הסרת מקפים בודדים שנשארו בסוף
   title = title.replace(/[\s\-–—]+$/, "");
   
   // ניקוי רווחים סופי
@@ -266,7 +266,7 @@ function getTVNetilTitle(selected) {
 }
 
 /* =========================================================
-   STEP 4: FAVEZ0ne SEARCH
+   STEP 4: FAVEZ0ne SEARCH (שליחת הכותרת המקורית המלאה בתוספת favez0ne)
 ========================================================= */
 
 async function searchFavez0ne(tvnetilTitle) {
@@ -274,6 +274,7 @@ async function searchFavez0ne(tvnetilTitle) {
     return { query: null, resultCount: 0, results: [] };
   }
 
+  // שולח את השם בדיוק כמו שהוא מ-TVNetil (לדוגמה: בלאגן ביער (2025)) יחד עם המילה favez0ne
   const query = `${tvnetilTitle} favez0ne`;
   const data = await serperSearch(query, 20);
   const organic = Array.isArray(data?.organic) ? data.organic : [];
@@ -507,7 +508,7 @@ app.get("/manifest.json", (_, res) => {
 ========================================================= */
 
 app.get("/", (_, res) => {
-  res.send("TVNetil Direct Streams 3.7.1");
+  res.send("TVNetil Direct Streams 3.8.2");
 });
 
 /* =========================================================
@@ -515,7 +516,7 @@ app.get("/", (_, res) => {
 ========================================================= */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("TVNetil Direct Streams 3.7.1 started");
+  console.log("TVNetil Direct Streams 3.8.2 started");
 });
 
 export default app;
