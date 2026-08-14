@@ -7,16 +7,16 @@ const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "10.5.0",
+  version: "10.6.0",
   name: "TVNetil Direct Streams",
-  description: "Strict Flow: TVNetil Title (Name + Year) -> Favez0ne Search",
+  description: "Strict Flow with Windows-1255 Encoding Fix & Clean Favez0ne Search",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
 };
 
 /* =========================================================
-   UTILS & ENCODING
+   UTILS & ENCODING FIXES
 ========================================================= */
 
 function decodeHtmlEntities(str) {
@@ -31,9 +31,23 @@ function decodeHtmlEntities(str) {
     .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
 }
 
+// תיקון קריטי: מנקה ג'יבריש ומבטיח מחרוזת עברית נקייה ב-UTF-8
+function fixHebrewEncoding(str) {
+  if (!str) return "";
+  let clean = decodeHtmlEntities(str);
+
+  // הסרת תווי ג'יבריש נפוצים מהמרות Windows-1255 פגומות
+  clean = clean.replace(/[\uFFFD\u007F-\u009F׳Ÿֲ¿ֲ½]/g, "");
+
+  // הסרת תווים בלתי נראים
+  clean = clean.replace(/[\u200B-\u200D\uFEFF]/g, "");
+
+  return clean.trim();
+}
+
 function cleanTvnetilHeaderTitle(rawTitle) {
   if (!rawTitle) return "";
-  let title = decodeHtmlEntities(rawTitle).trim();
+  let title = fixHebrewEncoding(rawTitle);
 
   // הסרת סיומות אתר TVNetil בלבד
   title = title
@@ -41,13 +55,12 @@ function cleanTvnetilHeaderTitle(rawTitle) {
     .replace(/^TVNetil\.net\s*[-|:]\s*/iu, "")
     .replace(/\s*[-|–—:]\s*סרטים.*$/iu, "")
     .replace(/\s*[-|–—:]\s*סדרות.*$/iu, "")
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .trim();
 
   return title;
 }
 
-// חותך רק את הסיומות מילוליות (כמו - מדובב / - מתורגם) ומשאיר "שם הסרט (שנה)"
+// חותך סיומות תרגום/דיבוב ומחזיר "שם (שנה)"
 function formatTitleForFavez0ne(titleFromTvnetil) {
   if (!titleFromTvnetil) return "";
   
@@ -79,6 +92,7 @@ async function fetchPageHtml(targetUrl, isWindows1255 = false) {
   const buffer = await response.arrayBuffer();
 
   if (isWindows1255) {
+    // פענוח מפורש מ-windows-1255 ל-utf-8
     let html = new TextDecoder("windows-1255").decode(buffer);
     if (!/[\u0590-\u05FF]/.test(html)) {
       html = new TextDecoder("utf-8").decode(buffer);
@@ -139,7 +153,6 @@ async function getTvnetilDetails(hebrewTitle) {
 ========================================================= */
 
 async function searchFavez0ne(exactTitleFromTvnetil) {
-  // התאמת הכותרת לפורמט של Favez0ne (למשל: "בלאגן ביער (2025)")
   const faveSearchTerm = formatTitleForFavez0ne(exactTitleFromTvnetil);
   
   console.log("[שלב 3 - Favez0ne] מדביק בחיפוש Favez0ne:", faveSearchTerm);
@@ -290,7 +303,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 10.5.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 10.6.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
