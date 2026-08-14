@@ -7,9 +7,9 @@ const SCRAPER_API_KEY = (process.env.SCRAPER_API_KEY || "").trim();
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "10.6.0",
+  version: "10.7.0",
   name: "TVNetil Direct Streams",
-  description: "Strict Flow with Windows-1255 Encoding Fix & Clean Favez0ne Search",
+  description: "Direct Flow with Fallback Title Reconstruction for Windows-1255",
   resources: ["stream"],
   types: ["movie", "series"],
   idPrefixes: ["tt"]
@@ -31,15 +31,11 @@ function decodeHtmlEntities(str) {
     .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
 }
 
-// תיקון קריטי: מנקה ג'יבריש ומבטיח מחרוזת עברית נקייה ב-UTF-8
 function fixHebrewEncoding(str) {
   if (!str) return "";
   let clean = decodeHtmlEntities(str);
 
-  // הסרת תווי ג'יבריש נפוצים מהמרות Windows-1255 פגומות
-  clean = clean.replace(/[\uFFFD\u007F-\u009F׳Ÿֲ¿ֲ½]/g, "");
-
-  // הסרת תווים בלתי נראים
+  clean = clean.replace(/[\uFFFD\u007F-\u009F]/g, "");
   clean = clean.replace(/[\u200B-\u200D\uFEFF]/g, "");
 
   return clean.trim();
@@ -49,7 +45,6 @@ function cleanTvnetilHeaderTitle(rawTitle) {
   if (!rawTitle) return "";
   let title = fixHebrewEncoding(rawTitle);
 
-  // הסרת סיומות אתר TVNetil בלבד
   title = title
     .replace(/\s*[-|–—:]\s*TVNetil.*$/iu, "")
     .replace(/^TVNetil\.net\s*[-|:]\s*/iu, "")
@@ -58,15 +53,6 @@ function cleanTvnetilHeaderTitle(rawTitle) {
     .trim();
 
   return title;
-}
-
-// חותך סיומות תרגום/דיבוב ומחזיר "שם (שנה)"
-function formatTitleForFavez0ne(titleFromTvnetil) {
-  if (!titleFromTvnetil) return "";
-  
-  return titleFromTvnetil
-    .replace(/\s*[-|–—:]\s*(מדובב|מתורגם|תרגום מובנה|איכות|1080p|720p|HD|WEBRip|BDRip).*$/iu, "")
-    .trim();
 }
 
 function extractUrlsFromText(text) {
@@ -92,7 +78,6 @@ async function fetchPageHtml(targetUrl, isWindows1255 = false) {
   const buffer = await response.arrayBuffer();
 
   if (isWindows1255) {
-    // פענוח מפורש מ-windows-1255 ל-utf-8
     let html = new TextDecoder("windows-1255").decode(buffer);
     if (!/[\u0590-\u05FF]/.test(html)) {
       html = new TextDecoder("utf-8").decode(buffer);
@@ -104,7 +89,7 @@ async function fetchPageHtml(targetUrl, isWindows1255 = false) {
 }
 
 /* =========================================================
-   שלב 1 + 2: איתור TVNetil והוצאת הכותרת המדויקת מהדף
+   שלב 1 + 2: איתור TVNetil והרכבת כותרת תקינה בעברית
 ========================================================= */
 
 async function getTvnetilDetails(hebrewTitle) {
@@ -127,7 +112,7 @@ async function getTvnetilDetails(hebrewTitle) {
     throw new Error(`שלב 1 נכשל: לא נמצא עמוד ב-TVNetil עבור השם "${hebrewTitle}"`);
   }
 
-  console.log("[שלב 2 - TVNetil HTML] נכנס לדף להעתיק כותרת:", tvnetilPageUrl);
+  console.log("[שלב 2 - TVNetil HTML] נכנס לדף להעתקת כותרת:", tvnetilPageUrl);
   const pageHtml = await fetchPageHtml(tvnetilPageUrl, true);
   const $page = cheerio.load(pageHtml);
 
@@ -138,28 +123,42 @@ async function getTvnetilDetails(hebrewTitle) {
     $page("h1").first().text() ||
     "";
 
-  const exactTitleFromTvnetil = cleanTvnetilHeaderTitle(rawTitle);
+  let exactTitleFromTvnetil = cleanTvnetilHeaderTitle(rawTitle);
 
-  if (!exactTitleFromTvnetil) {
-    throw new Error("שלב 2 נכשל: לא ניתן היה לחלץ כותרת מתוך דף ה-TVNetil");
+  // מנגנון הגנה: בדיקה אם חילוץ ה-HTML מ-TVNetil איבד את האותיות בעברית
+  const hebrewCharsMatch = exactTitleFromTvnetil.match(/[\u0590-\u05FF]/g);
+  const hasHebrew = hebrewCharsMatch && hebrewCharsMatch.length >= 2;
+
+  if (!hasHebrew) {
+    console.log("[שלב 2 - אזהרה] הכותרת מ-TVNetil לא הכילה עברית תקינה. מבצע שילוב מוגן מעברית Nuvio.");
+    
+    // חילוץ שנה מתוך הכותרת הפגומה אם קיימת (למשל 2025)
+    const yearMatch = exactTitleFromTvnetil.match(/\b(19\d\d|20\d\d)\b/);
+    const extractedYear = yearMatch ? ` (${yearMatch[1]})` : "";
+
+    // הרכבה מחדש: שם בעברית מ-Nuvio + שנה מ-TVNetil
+    exactTitleFromTvnetil = `${hebrewTitle}${extractedYear}`.trim();
   }
 
-  console.log("[שלב 2 - כותרת מלאה מ-TVNetil]:", exactTitleFromTvnetil);
+  console.log("[שלב 2 - כותרת סופית מתוכננת]:", exactTitleFromTvnetil);
   return { tvnetilPageUrl, exactTitleFromTvnetil };
 }
 
 /* =========================================================
-   שלב 3: חיפוש ב-Favez0ne בפורמט "שם (שנה)"
+   שלב 3: חיפוש ממוקד ב-Favez0ne
 ========================================================= */
 
-async function searchFavez0ne(exactTitleFromTvnetil) {
-  const faveSearchTerm = formatTitleForFavez0ne(exactTitleFromTvnetil);
-  
-  console.log("[שלב 3 - Favez0ne] מדביק בחיפוש Favez0ne:", faveSearchTerm);
+async function searchFavez0ne(exactTitleFromTvnetil, originalNuvioTitle) {
+  // הסרת סיומות תרגום מילוליות אם נשארו
+  let faveSearchTerm = exactTitleFromTvnetil
+    .replace(/\s*[-|–—:]\s*(מדובב|מתורגם|תרגום מובנה|איכות|1080p|720p|HD|WEBRip|BDRip).*$/iu, "")
+    .trim();
 
-  const faveSearchUrl = `https://favez0ne.net/?s=${encodeURIComponent(faveSearchTerm)}`;
-  const html = await fetchPageHtml(faveSearchUrl, false);
-  const $ = cheerio.load(html);
+  console.log("[שלב 3 - Favez0ne] ניסיון ראשון עם השאילתה:", faveSearchTerm);
+
+  let faveSearchUrl = `https://favez0ne.net/?s=${encodeURIComponent(faveSearchTerm)}`;
+  let html = await fetchPageHtml(faveSearchUrl, false);
+  let $ = cheerio.load(html);
 
   let favePostUrl = "";
 
@@ -169,6 +168,22 @@ async function searchFavez0ne(exactTitleFromTvnetil) {
       favePostUrl = href;
     }
   });
+
+  // ניסיון גיבוי קטן בלבד עם השם הנקי מ-Nuvio
+  if (!favePostUrl && faveSearchTerm !== originalNuvioTitle) {
+    console.log("[שלב 3 - Favez0ne] ניסיון גיבוי עם שם Nuvio המקורי:", originalNuvioTitle);
+    faveSearchUrl = `https://favez0ne.net/?s=${encodeURIComponent(originalNuvioTitle)}`;
+    html = await fetchPageHtml(faveSearchUrl, false);
+    $ = cheerio.load(html);
+
+    $("a[href*='favez0ne.net']").each((_, el) => {
+      const href = $(el).attr("href");
+      if (href && href.includes("/20") && !favePostUrl && !href.includes("?s=")) {
+        favePostUrl = href;
+      }
+    });
+    if (favePostUrl) faveSearchTerm = originalNuvioTitle;
+  }
 
   if (!favePostUrl) {
     throw new Error(`שלב 3 נכשל: לא נמצא פוסט ב-Favez0ne עבור השאילתה "${faveSearchTerm}"`);
@@ -261,11 +276,11 @@ async function extractStreamsFromFavePage(faveUrl, exactTitle) {
 
 async function resolveDirectFlow(hebrewTitle) {
   try {
-    // 1+2. איתור דף TVNetil והעתקת הכותרת המלאה מהדף
+    // 1+2. איתור דף TVNetil והרכבת כותרת עברית בטוחה
     const { tvnetilPageUrl, exactTitleFromTvnetil } = await getTvnetilDetails(hebrewTitle);
 
-    // 3. חיפוש ב-Favez0ne בפורמט "שם (שנה)"
-    const { favePostUrl, faveSearchTerm } = await searchFavez0ne(exactTitleFromTvnetil);
+    // 3. חיפוש ב-Favez0ne
+    const { favePostUrl, faveSearchTerm } = await searchFavez0ne(exactTitleFromTvnetil, hebrewTitle);
 
     // 4. משיכת הקישורים הישירים מ-Favez0ne
     const streams = await extractStreamsFromFavePage(favePostUrl, exactTitleFromTvnetil);
@@ -303,7 +318,7 @@ app.get("/test-title", async (req, res) => {
 });
 
 app.get("/manifest.json", (_, res) => res.json(MANIFEST));
-app.get("/", (_, res) => res.send("TVNetil Direct Streams 10.6.0"));
+app.get("/", (_, res) => res.send("TVNetil Direct Streams 10.7.0"));
 
 app.listen(process.env.PORT || 3000);
 export default app;
