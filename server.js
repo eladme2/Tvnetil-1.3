@@ -6,7 +6,7 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const MANIFEST = {
   id: "com.elad.tvnetil.directstreams",
-  version: "3.5.0",
+  version: "3.6.0",
   name: "TVNetil Direct Streams",
   description:
     "Nuvio Hebrew title -> TVNetil -> result title -> Favez0ne Search -> PixelDrain/GoFile streams",
@@ -258,7 +258,7 @@ function getTVNetilTitle(selected) {
 }
 
 /* =========================================================
-   STEP 4: FAVEZ0ne SEARCH (ממוקד באתר Favez0ne)
+   STEP 4: FAVEZ0ne SEARCH (חיפוש מותאם לחשבון חינמי)
 ========================================================= */
 
 async function searchFavez0ne(tvnetilTitle) {
@@ -266,18 +266,23 @@ async function searchFavez0ne(tvnetilTitle) {
     return { query: null, resultCount: 0, results: [] };
   }
 
-  // מחפש את הכותרת המדויקת אך ורק בתוך Favez0ne
-  const query = `${tvnetilTitle} site:favez0ne.net`;
+  // חיפוש חופשי נתמך לחלוטין בחשבון חינמי
+  const query = `${tvnetilTitle} favez0ne`;
   const data = await serperSearch(query, 20);
   const organic = Array.isArray(data?.organic) ? data.organic : [];
 
-  const favezResults = organic.map(item => ({
-    title: item?.title || null,
-    link: item?.link || null,
-    snippet: item?.snippet || null,
-    date: item?.date || null,
-    position: item?.position || null
-  }));
+  const favezResults = organic
+    .map(item => ({
+      title: item?.title || null,
+      link: item?.link || null,
+      snippet: item?.snippet || null,
+      date: item?.date || null,
+      position: item?.position || null
+    }))
+    .filter(item => {
+      const link = String(item.link || "").toLowerCase();
+      return link.includes("favez0ne");
+    });
 
   return {
     query,
@@ -373,7 +378,6 @@ async function resolveTVNetil(hebrewTitle) {
     };
   }
 
-  // שלב 4 החדש: חיפוש ממוקד ב-Favez0ne
   const favezSearch = await searchFavez0ne(tvnetilTitle);
   console.log("FAVEZ0NE SEARCH RESULTS:", favezSearch.resultCount);
 
@@ -496,7 +500,7 @@ app.get("/manifest.json", (_, res) => {
 ========================================================= */
 
 app.get("/", (_, res) => {
-  res.send("TVNetil Direct Streams 3.5.0");
+  res.send("TVNetil Direct Streams 3.6.0");
 });
 
 /* =========================================================
@@ -504,7 +508,7 @@ app.get("/", (_, res) => {
 ========================================================= */
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("TVNetil Direct Streams 3.5.0 started");
+  console.log("TVNetil Direct Streams 3.6.0 started");
 });
 
 export default app;
